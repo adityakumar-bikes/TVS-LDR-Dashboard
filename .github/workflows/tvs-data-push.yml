@@ -1,0 +1,64 @@
+name: TVS Daily Data Push
+
+on:
+  schedule:
+    - cron: "0 4 * * *"    # 09:30 AM IST (UTC+5:30) — 30-min buffer for GitHub queue lag
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — fetch, process and validate but do NOT publish'
+        type: boolean
+        default: false
+
+concurrency:
+  group: tvs-data-push
+  cancel-in-progress: false  # never cancel a running push; queue instead
+
+jobs:
+  push-data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60        # Apps Script fetch + processing should complete well within 1 hour
+    permissions:
+      contents: write         # needed for the keep-alive commit and data file
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests pandas openpyxl pyxlsb
+
+      - name: Download historical cache
+        run: |
+          gh release download v1-data \
+            --repo mihirbhatt1402/TVS-LDR-HistData \
+            --pattern "hist_cache.json.gz" \
+            --dir TVS/
+          echo "hist_cache size: $(du -sh TVS/hist_cache.json.gz)"
+        env:
+          GH_TOKEN: ${{ secrets.HIST_DATA_PAT }}
+
+      - name: Run data push
+        run: python TVS/push_tvs_data.py ${{ inputs.dry_run == true && '--dry-run' || '' }}
+        env:
+          TVS_PUSH_SECRET: ${{ secrets.TVS_PUSH_SECRET }}
+
+      - name: Keep repo active
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          echo "Last run: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" > last_run.txt
+          git add last_run.txt
+          git add data/tvs_payload.json.gz 2>/dev/null || true
+          git add data/tvs_payload_prev.json.gz 2>/dev/null || true
+          git add TVS/source_metrics.json 2>/dev/null || true
+          git add TVS/unknown_model_diagnostic.json 2>/dev/null || true
+          git rm --cached data/tvs_payload.json 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "chore: pipeline run $(date -u '+%Y-%m-%d')"
+          git pull --rebase
+          git push

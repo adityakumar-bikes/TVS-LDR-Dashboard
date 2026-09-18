@@ -1,0 +1,18 @@
+{
+  "retail_raw": {
+    "rows": 92477
+  },
+  "Jul'26-LeadMaster": {
+    "rows": 190649,
+    "filtered_rows": 190631
+  },
+  "Aug'26-LeadMaster-FROZEN": {
+    "rows": 157672,
+    "filtered_rows": 156762
+  },
+  "Sep'26-LeadMaster": {
+    "rows": 157672,
+    "filtered_rows": 78697
+  },
+  "date": "2026-09-14"
+}

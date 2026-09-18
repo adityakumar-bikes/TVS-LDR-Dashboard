@@ -1,0 +1,29 @@
+# Historical data cache — stored privately, never committed here
+TVS/hist_cache.json.gz
+
+# Local dev / pipeline artefacts
+TVS/push_tvs_data.bat
+TVS/tvs_last_payload.json
+TVS/tvs_data_server.py
+TVS/rebuild_hist_cache.py
+TVS/diagnose_unclassified.py
+TVS/normalize_retail_models.py
+TVS/test_*.py
+TVS/validate_payload.py
+TVS/verify_*.py
+TVS/__pycache__/
+__pycache__/
+
+# Staging / debug payloads
+data/tvs_payload_staging_*.json.gz
+data/tvs_payload_debug_*.json.gz
+
+# Local diagnostics
+TVS/unknown_model_diagnostic.json
+extract_head.txt
+extract_utils.txt
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
