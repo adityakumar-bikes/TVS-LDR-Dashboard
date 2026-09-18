@@ -36,7 +36,7 @@ jobs:
       - name: Download historical cache
         run: |
           gh release download v1-data \
-            --repo mihirbhatt1402/TVS-LDR-HistData \
+            --repo adityakumar-bikes/TVS-LDR-HistData \
             --pattern "hist_cache.json.gz" \
             --dir TVS/
           echo "hist_cache size: $(du -sh TVS/hist_cache.json.gz)"
