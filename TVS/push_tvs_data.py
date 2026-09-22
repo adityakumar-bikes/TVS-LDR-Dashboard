@@ -2164,6 +2164,7 @@ def build_payload(all_leads, retail_map):
     lm_idx,  src_idx, lt_idx, mdl_idx, st_idx, zone_idx, city_idx = {},{},{},{},{},{},{}
     lm_arr,  src_arr, lt_arr, mdl_arr, st_arr, zone_arr, city_arr  = [],[],[],[],[],[],[]
     dl_idx,  dl_arr  = {}, []
+    sn_idx,  sn_arr  = {}, []   # granular Status_Name funnel dimension (live sheets only)
     city_to_state = {}
 
     def ix(d, arr, v):
@@ -2186,6 +2187,13 @@ def build_payload(all_leads, retail_map):
     pmr,  u_pmr  = {}, {}   # purch_model × enq_model × src × month → [R, R_dms, R_co] (retails only)
     cdm, csm, cdsm = {},{},{}
     dl_sn = {}  # city × dealer × lead-month → [L_open, L_booking, L_lost]
+    # Granular Status_Name funnel: status × source × city × model × lead-month → count.
+    # Populated ONLY when a row carries a non-blank Status_Name — in practice that means
+    # rows from the current + previous-month live GSheets (the only sheets MIS Automation
+    # writes LMS status updates into daily). Historical hist_cache leads have no
+    # Status_Name column and are silently skipped, so this naturally scopes itself to
+    # "current month + T-1" without any month-range logic.
+    snf = {}
     cxm, u_cxm = {}, {}           # city × model × month
     cxsm, u_cxsm = {}, {}         # city × src × model × month (source-filterable)
     u_cm, u_csm = {}, {}          # city × month (retail-month attribution)
@@ -2306,6 +2314,12 @@ def build_payload(all_leads, retail_map):
         bump(stcm,    f"{sti}|{cti}|{li}",  is_ret, rtype)
         bump(univ,    f"{mi}|{si}|{sti}|{tti}|{li}", is_ret, rtype)
 
+        _raw_sn = _norm_sn(_sns[i]) if _sns[i] else ''
+        if _raw_sn:
+            sni = ix(sn_idx, sn_arr, _raw_sn)
+            _sfk = f"{sni}|{si}|{cti}|{mi}|{li}"
+            snf[_sfk] = snf.get(_sfk, 0) + 1
+
         if _dls is not None:
             dl  = _dls[i].strip() or 'Unknown'
             dli = ix(dl_idx, dl_arr, dl)
@@ -2406,6 +2420,11 @@ def build_payload(all_leads, retail_map):
             for sn_val, cnt in top_unknown:
                 print(f"    {cnt:>8,}  {repr(sn_val)}", flush=True)
 
+    if sn_arr:
+        print(f"Status funnel: {len(sn_arr)} distinct Status_Name values, "
+              f"{len(snf):,} (status×src×city×model×month) combinations, "
+              f"{sum(snf.values()):,} leads carrying live LMS status", flush=True)
+
     def to_rows(d, key_fn):
         return [[*key_fn(k), v[0], v[1], v[2], v[3]] for k, v in d.items()]
 
@@ -2422,6 +2441,7 @@ def build_payload(all_leads, retail_map):
         # Parallel to mdl: maps each canonical enquired-model name to its
         # Retail Dispersion family (for same/cross detection in the frontend).
         'mdl_disp': [CANONICAL_TO_DISP_FAMILY.get(m, m) for m in mdl_arr],
+        'sn': sn_arr,
     }
     if dl_col and dl_arr:
         maps_payload['dl'] = dl_arr
@@ -2481,6 +2501,8 @@ def build_payload(all_leads, retail_map):
         'ram':       [[*map(int, k.split('|')), *v] for k, v in ram.items()],
         'ram_meta':  {'total': _ram_total, 'valid': _ram_valid,
                       'no_rd': _ram_no_rd, 'no_cd': _ram_no_cd, 'neg': _ram_neg},
+        # [status_name_idx, src_idx, city_idx, model_idx, lead_month_idx, count]
+        'snf':       [[*map(int, k.split('|')), v] for k, v in snf.items()],
     }
     print(f"Done — {total:,} leads  {len(retail_map):,} retails", flush=True)
     print(f"Ageing: retails={_ram_total:,}  valid={_ram_valid:,}  "

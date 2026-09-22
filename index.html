@@ -3248,6 +3248,154 @@ const GeoDealerTab = React.memo(function GeoDealerTab({ data, filters, months, R
 });
 
 /* ════════════════════════════════════════════════════════════════════
+   STATUS FUNNEL TAB
+   Granular LMS Status_Name breakdown for CPS-triggered leads.
+   Sourced from data.snf: [status_idx, src_idx, city_idx, model_idx, lead_month_idx, count].
+   Only populated for months whose live GSheet carries a Status_Name column —
+   in practice the current + previous ("T-1") month, since those are the only
+   sheets MIS Automation writes daily LMS status updates into. Older/frozen
+   months and historical hist_cache leads have no Status_Name and are absent
+   here by construction, so this tab is naturally scoped to "current + T-1".
+   ════════════════════════════════════════════════════════════════════ */
+const StatusFunnelTab = React.memo(function StatusFunnelTab({ data, filters, months }) {
+  const { maps } = data;
+  const snf     = data.snf || [];
+  const hasSnf  = !!(maps.sn && maps.sn.length > 0);
+
+  const [search,  setSearch]  = useState('');
+  const [sortCol, setSortCol] = useState('count');
+  const [sortDir, setSortDir] = useState(-1);  // -1 = desc
+
+  const monthSet = useMemo(() => new Set(months), [months]);
+
+  // ── Aggregate: Status_Name → count, honouring the standard global filters ──
+  const tableRows = useMemo(() => {
+    if (!hasSnf) return [];
+    const allM    = monthSet.size === 0;
+    const hasSrcF = filters.sources && filters.sources.size > 0;
+    const hasCF   = filters.cities  && filters.cities.size  > 0;
+    const hasMdlF = filters.models  && filters.models.size  > 0;
+
+    const acc = new Map(); // sni → count
+    for (const row of snf) {
+      const [sni, si, cti, mi, li, count] = row;
+      const mon = maps.lm[li];
+      if (!allM && !monthSet.has(mon)) continue;
+      if (hasSrcF && !filters.sources.has(maps.src[si])) continue;
+      if (hasCF   && !filters.cities.has(maps.city[cti])) continue;
+      if (hasMdlF && !filters.models.has(maps.mdl[mi])) continue;
+      acc.set(sni, (acc.get(sni) || 0) + count);
+    }
+
+    const total = [...acc.values()].reduce((a, v) => a + v, 0) || 1;
+    const out = [];
+    for (const [sni, count] of acc) {
+      out.push({ status: maps.sn[sni] || '—', count, pct: count / total * 100 });
+    }
+    return out;
+  }, [snf, maps, monthSet, filters, hasSnf]);
+
+  const displayRows = useMemo(() => {
+    let rows = tableRows;
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      rows = rows.filter(r => r.status.toLowerCase().includes(q));
+    }
+    const key = sortCol, d = sortDir;
+    return [...rows].sort((a, b) => {
+      const av = a[key], bv = b[key];
+      if (typeof av === 'number' && typeof bv === 'number') return d * (bv - av);
+      return d * String(av).localeCompare(String(bv));
+    });
+  }, [tableRows, search, sortCol, sortDir]);
+
+  function thSort(col, label) {
+    const active = sortCol === col;
+    const arrow  = active ? (sortDir === -1 ? ' ↓' : ' ↑') : ' ↕';
+    return ce('th', {
+      className: col === 'status' ? 'grp-toggle left' : 'grp-toggle',
+      style: { cursor:'pointer', userSelect:'none', background: active ? '#C5CAE9' : '#E8EAF6',
+               color: active ? '#0D47A1' : '#1A237E' },
+      onClick: () => {
+        if (active) setSortDir(d => -d);
+        else { setSortCol(col); setSortDir(-1); }
+      }
+    }, label + arrow);
+  }
+
+  if (!hasSnf) return ce('div', {
+    className:'fs-14', style:{textAlign:'center',padding:60,color:'#94A3B8'}
+  },
+    ce('div', { style:{fontSize:32,marginBottom:12} }, '🔀'),
+    'Status funnel data will be available after the next pipeline run.'
+  );
+
+  const noData = displayRows.length === 0;
+  const totalLeads = displayRows.reduce((a, r) => a + r.count, 0);
+
+  return ce('div', { className:'fade-up' },
+
+    // ── Header bar ────────────────────────────────────────────────────────
+    ce('div', { className:'card', style:{padding:'14px 18px',marginBottom:12,borderTop:'3px solid #E31837',
+        display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:10} },
+      ce('div', { className:'fs-14', style:{fontWeight:800,color:'#0f172a',letterSpacing:'-.02em'} },
+        'LMS Status Funnel'),
+      ce('div', { style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'} },
+        ce('input', {
+          type:'text', placeholder:'Search status…',
+          value: search, onChange: e => setSearch(e.target.value),
+          style:{ padding:'5px 12px', border:'1px solid #CBD5E1', borderRadius:20,
+                  fontSize:'calc(11px * var(--tvs-font-scale))', fontFamily:'inherit',
+                  outline:'none', width:200, background:'#fff', color:'#0f172a' }
+        }),
+        ce('div', { className:'fs-10', style:{color:'#64748B',fontFamily:'DM Mono,monospace'} },
+          Nf(displayRows.length) + ' status' + (displayRows.length !== 1 ? 'es' : ''))
+      )
+    ),
+
+    // ── Summary KPIs ──────────────────────────────────────────────────────
+    ce(SummaryBar, { kpis: [
+      { label:'Statuses',     value: Nf(displayRows.length) },
+      { label:'Leads (CPS-triggered, current + T-1)', value: Nf(totalLeads), accent:'#003087' },
+    ] }),
+
+    // ── Table ───────────────────────────────────────────────────────────
+    ce('div', { className:'card', style:{padding:0,overflow:'hidden'} },
+      ce('div', { className:'scroll-x' },
+        ce('table', null,
+          ce('thead', null,
+            ce('tr', null,
+              thSort('status', 'Status'),
+              thSort('count',  'Leads'),
+              thSort('pct',    '% of Total'),
+            )
+          ),
+          ce('tbody', null,
+            noData
+              ? ce('tr', null, ce('td', { colSpan:3, style:{textAlign:'center',padding:40,color:'#94A3B8'} },
+                  search ? 'No statuses match "' + search + '".' : 'No data for the selected filters.'))
+              : displayRows.map(r =>
+                  ce('tr', { key: r.status },
+                    ce('td', { className:'label', style:{minWidth:220} }, r.status),
+                    ce('td', { style:{fontWeight:600} }, Nf(r.count)),
+                    ce('td', null,
+                      ce('div', { style:{display:'flex',alignItems:'center',gap:8} },
+                        ce('div', { style:{flex:1,height:6,borderRadius:3,background:'#E2E8F0',overflow:'hidden',maxWidth:120} },
+                          ce('div', { style:{width:r.pct.toFixed(1)+'%',height:'100%',background:'#003087'} })
+                        ),
+                        ce('span', { className:'fs-10', style:{color:'#64748B',fontFamily:'DM Mono,monospace'} }, r.pct.toFixed(1)+'%')
+                      )
+                    ),
+                  )
+                )
+          )
+        )
+      )
+    )
+  );
+});
+
+/* ════════════════════════════════════════════════════════════════════
    MODEL PERFORMANCE TAB
    Month-on-month Leads × Retail × L2R% for every model.
    Columns: months sorted latest → oldest; Rows: models by total leads.
@@ -3443,6 +3591,7 @@ const TABS = [
   { id:'modelperf',   label:'Model Performance' },
   { id:'statexmodel', label:'Geo & Model' },
   { id:'geodealer',   label:'Geo & Dealer' },
+  { id:'statusfunnel',label:'Status Funnel' },
   { id:'dispersion',  label:'Retail Dispersion' },
   { id:'pivot',       label:'Pivot Table' },
   { id:'ageing',      label:'Retail Ageing' },
@@ -3576,6 +3725,7 @@ function App() {
       case 'modelperf':   return ce(ModelPerfTab,      props);
       case 'statexmodel': return ce(StateModelTab,     props);
       case 'geodealer':   return ce(GeoDealerTab,       props);
+      case 'statusfunnel':return ce(StatusFunnelTab,    props);
       case 'dispersion':  return ce(DispersionTab,     props);
       case 'pivot':       return ce(PivotTab,          props);
       case 'ageing':      return ce(RetailAgeingTab,   props);
