@@ -3711,7 +3711,7 @@ function App() {
   const role       = auth ? auth.role : null;
   const viewerMode = role === 'viewer';
   const visibleTabs = viewerMode
-    ? TABS.filter(t => ['modelxsrc','modelperf','statexmodel','geodealer'].includes(t.id))
+    ? TABS.filter(t => ['modelxsrc','modelperf','statexmodel','geodealer','pivot'].includes(t.id))
     : TABS;
 
   const tabContent = useMemo(() => {
