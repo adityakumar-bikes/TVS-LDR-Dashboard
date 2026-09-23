@@ -2,7 +2,13 @@ name: TVS Daily Data Push
 
 on:
   schedule:
-    - cron: "0 4 * * *"    # 09:30 AM IST (UTC+5:30) — 30-min buffer for GitHub queue lag
+    # Nominal fire time 22:00 UTC (03:30 AM IST). Observed GitHub Actions
+    # scheduled-trigger queue lag on this repo runs ~5 hours, so this is a
+    # fallback safety net — the primary trigger is a local launchd job on
+    # this Mac (~/Library/LaunchAgents/com.tvsldr.dailytrigger.plist) that
+    # fires workflow_dispatch (which starts instantly, unlike `schedule`)
+    # at 07:00 AM IST daily, with an automatic retry on failure.
+    - cron: "0 22 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
