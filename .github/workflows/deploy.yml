@@ -3,6 +3,15 @@ name: Deploy TVS Lead Disposition Dashboard
 on:
   push:
     branches: [main]
+  # The daily data-push workflow commits with the default GITHUB_TOKEN, and
+  # GitHub's loop-guard means token-authored pushes never trigger other
+  # `on: push` workflows. Without this, Pages only redeploys after a human
+  # pushes a code change — the payload commits from tvs-data-push.yml would
+  # silently never reach the live dashboard. workflow_run is NOT subject to
+  # that guard, so this is the actual daily-refresh path.
+  workflow_run:
+    workflows: ["TVS Daily Data Push"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -16,6 +25,9 @@ concurrency:
 
 jobs:
   deploy:
+    # For workflow_run triggers, only deploy if the data push actually succeeded
+    # (a dry-run or failed run has nothing new worth deploying).
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -24,6 +36,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Prepare site
         run: |
