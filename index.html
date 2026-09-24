@@ -3708,6 +3708,56 @@ function App() {
     return buildPmMaps(effectiveData.pmr || [], filters.purchasedModels, effectiveData.maps);
   }, [effectiveData, filters.purchasedModels]);
 
+  // Global header-ribbon KPIs (Leads / Retail / L2R% / Retail-till-date).
+  // Mirrors OverviewTab's own totals calc (city → model/state/LT-filtered
+  // univ → plain source×month) so the ribbon always agrees with the
+  // Overview tab's headline numbers for the same filter selection.
+  const headerKpis = useMemo(() => {
+    if (!effectiveData) return null;
+    const { maps, sm, cm, univ: univRaw } = effectiveData;
+    const univD = univRaw || [];
+    const cmD   = cm || [];
+    const getLR = makeLR(effectiveData.rt_cols, RT);
+    const allM  = !filters.months  || filters.months.size  === 0;
+    const allS  = !filters.sources || filters.sources.size === 0;
+    const univF = makeUnivFilter(filters);
+    const hasCityFilter = filters.cities && filters.cities.size > 0 && cmD.length && maps.city;
+    const pmRI  = RT === 'dms' ? 1 : RT === 'co' ? 2 : 0;
+    let l = 0, r = 0;
+    if (hasCityFilter) {
+      for (const row of cmD) {
+        if (!filters.cities.has(maps.city[row[0]])) continue;
+        if (!allM && !filters.months.has(maps.lm[row[1]])) continue;
+        const [rl, rr] = getLR(row); l += rl; r += rr;
+      }
+    } else if (univF) {
+      const seenRT = new Set();
+      for (const row of univD) {
+        if (!allM && !filters.months.has(maps.lm[row[4]])) continue;
+        if (!allS && !filters.sources.has(maps.src[row[1]])) continue;
+        if (!univF(row, maps)) continue;
+        const [rl, rr_raw] = getLR(row);
+        let rr = rr_raw;
+        if (pmMaps) {
+          const rtKey = row[0]+'|'+row[1]+'|'+row[4];
+          if (!seenRT.has(rtKey)) { seenRT.add(rtKey); const v = pmMaps.miSiLi.get(rtKey); rr = v ? v[pmRI] : 0; }
+          else rr = 0;
+        }
+        l += rl; r += rr;
+      }
+    } else {
+      for (const row of (sm || [])) {
+        if (!allM && !filters.months.has(maps.lm[row[1]])) continue;
+        if (!allS && !filters.sources.has(maps.src[row[0]])) continue;
+        const [rl, rr_raw] = getLR(row);
+        const pmOv = pmMaps && pmMaps.siLi.get(row[0]+'|'+row[1]);
+        const rr = pmOv ? pmOv[pmRI] : (pmMaps ? 0 : rr_raw);
+        l += rl; r += rr;
+      }
+    }
+    return { leads: l, retail: r, l2r: l > 0 ? r / l * 100 : 0 };
+  }, [effectiveData, filters, RT, pmMaps]);
+
   const role       = auth ? auth.role : null;
   const viewerMode = role === 'viewer';
   const visibleTabs = viewerMode
@@ -3818,6 +3868,41 @@ function App() {
             className: 'tab-pill' + (tab === t.id ? ' active' : ''),
             onClick: () => startT(() => setTab(t.id))
           }, t.label))
+        )
+      )
+    ),
+
+    // ── Stat ribbon (Leads / Retail / L2R% / Retail-till-date) ──
+    headerKpis && ce('div', { style:{background:'linear-gradient(135deg,#7A0E1F,#B01229)'} },
+      ce('div', { style:{maxWidth:1440,margin:'0 auto',padding:'14px 20px',display:'flex',alignItems:'center',
+          justifyContent:'space-between',flexWrap:'wrap',gap:16} },
+        ce('div', { style:{display:'flex',alignItems:'center',gap:12} },
+          ce('div', { style:{width:44,height:44,borderRadius:12,background:'rgba(255,255,255,.15)',
+              display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0} },
+            ce('span', { className:'fs-15',style:{fontWeight:900,color:'#fff',fontFamily:'DM Mono,monospace',letterSpacing:'-.04em'} }, 'TVS')
+          ),
+          ce('div', null,
+            ce('div', { className:'fs-14',style:{fontWeight:800,color:'#fff',letterSpacing:'-.02em',lineHeight:1.15} }, 'TVS Motor Company · LDR'),
+            ce('div', { className:'fs-10',style:{color:'rgba(255,255,255,.75)',fontWeight:600} }, 'LEAD DISPOSITION DASHBOARD v2.0'),
+          )
+        ),
+        ce('div', { style:{display:'flex',alignItems:'center',gap:0,flexWrap:'wrap'} },
+          [
+            { label:'LEADS',       value: Nf(headerKpis.leads) },
+            { label:'RETAIL',      value: Nf(headerKpis.retail) },
+            { label:'L2R%',        value: headerKpis.leads > 0 ? headerKpis.l2r.toFixed(1)+'%' : '—' },
+            { label:'RETAIL TILL', value: (() => {
+                if (!data || !data.t) return '—';
+                const d = new Date(data.t);
+                return String(d.getDate()).padStart(2,'0') + ' ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear();
+              })() },
+          ].map((k, idx) => ce(React.Fragment, { key:k.label },
+            idx > 0 && ce('div', { style:{width:1,height:32,background:'rgba(255,255,255,.25)',margin:'0 20px'} }),
+            ce('div', { style:{textAlign:'center'} },
+              ce('div', { className:'fs-9',style:{color:'rgba(255,255,255,.65)',fontWeight:700,letterSpacing:'.06em'} }, k.label),
+              ce('div', { className:'fs-16',style:{color:'#fff',fontWeight:800,fontFamily:'DM Mono,monospace',lineHeight:1.3} }, k.value),
+            )
+          ))
         )
       )
     ),
