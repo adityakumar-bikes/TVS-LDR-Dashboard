@@ -7,12 +7,12 @@
     "filtered_rows": 190631
   },
   "Aug'26-LeadMaster-FROZEN": {
-    "rows": 157673,
-    "filtered_rows": 156762
+    "rows": 177078,
+    "filtered_rows": 4
   },
   "Sep'26-LeadMaster": {
     "rows": 177078,
-    "filtered_rows": 177073
+    "filtered_rows": 8293
   },
-  "date": "2026-10-02"
+  "date": "2026-10-03"
 }
