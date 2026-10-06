@@ -207,14 +207,19 @@ async function _safeJson(r, label) {
 // 6 attempts at 33% failure rate gives P(all fail) < 0.1%.
 // During pipeline runs (higher load), more attempts are needed.
 const _ROLE_DELAYS = [0, 500, 1000, 2000, 3000, 5000]; // ms between retries
-async function apiFetchRole(email) {
+async function apiFetchRole(email, onProgress) {
   let lastErr;
   for (let a = 0; a < _ROLE_DELAYS.length; a++) {
     if (_ROLE_DELAYS[a] > 0) await new Promise(res => setTimeout(res, _ROLE_DELAYS[a]));
+    if (onProgress) onProgress(a + 1, _ROLE_DELAYS.length);
+    // Per-attempt timeout: a stalled Apps Script request must not hang the login forever.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 25000);
     try {
-      const r = await fetch(APPS_SCRIPT_URL + '?action=checkRole&email=' + encodeURIComponent(email));
+      const r = await fetch(APPS_SCRIPT_URL + '?action=checkRole&email=' + encodeURIComponent(email), { signal: ctrl.signal });
       return await _safeJson(r, 'checkRole');
     } catch(e) { lastErr = e; }
+    finally { clearTimeout(timer); }
   }
   // All attempts exhausted. Wrap with actionable guidance.
   throw new Error('Access service is temporarily unavailable — this can happen while the daily data sync is running. Please try again in 1–2 minutes.');
@@ -2249,14 +2254,15 @@ function LoginScreen({ onLogin }) {
   const [email, setEmail]     = useState('');
   const [loading, setLoading] = useState(false);
   const [err, setErr]         = useState('');
+  const [prog, setProg]       = useState(null);
 
   async function handleSubmit(ev) {
     ev.preventDefault();
     const e = email.trim().toLowerCase();
     if (!e) return;
-    setLoading(true); setErr('');
+    setLoading(true); setErr(''); setProg(null);
     try {
-      const res = await apiFetchRole(e);
+      const res = await apiFetchRole(e, (n, total) => setProg({ n, total }));
       if (res.error) throw new Error(res.error);
       onLogin(e, '', res.role);
     } catch(ex) { setErr('Could not verify access: ' + ex.message); }
@@ -2279,7 +2285,9 @@ function LoginScreen({ onLogin }) {
           })
         ),
         ce('button', { className:'auth-btn', type:'submit', disabled:loading },
-          loading ? 'Checking…' : 'Continue →')
+          loading ? 'Checking…' : 'Continue →'),
+        loading && prog && prog.n > 1 && ce('div', { className:'auth-note', style:{marginTop:10} },
+          'Access service is responding slowly — retrying (' + prog.n + '/' + prog.total + '). This can take up to a couple of minutes.')
       ),
       ce('div', { className:'auth-note' },
         'Access is limited to @girnarsoft.com and @girnarcare.com email addresses.')
