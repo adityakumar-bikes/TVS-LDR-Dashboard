@@ -6,13 +6,20 @@
     "rows": 190649,
     "filtered_rows": 190631
   },
-  "Aug'26-LeadMaster-FROZEN": {
+  "CPS-Current": {
     "rows": 177078,
-    "filtered_rows": 4
+    "filtered_rows": 40019,
+    "month": 2610
   },
-  "Sep'26-LeadMaster": {
+  "CPS-T1-PreviousMonth": {
     "rows": 177078,
-    "filtered_rows": 35037
+    "filtered_rows": 177073,
+    "month": 2609
+  },
+  "CPS-T2-PrevToPrevMonth": {
+    "rows": 157673,
+    "filtered_rows": 156762,
+    "month": 2608
   },
   "date": "2026-10-06"
 }
