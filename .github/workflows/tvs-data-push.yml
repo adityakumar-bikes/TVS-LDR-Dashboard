@@ -49,10 +49,34 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.HIST_DATA_PAT }}
 
+      - name: Download live archive (closed months)
+        continue-on-error: true
+        run: |
+          gh release download live-archive \
+            --repo adityakumar-bikes/TVS-LDR-HistData \
+            --pattern "live_archive.json.gz" \
+            --dir TVS/ || echo "No live archive yet (first run) — it will be created"
+        env:
+          GH_TOKEN: ${{ secrets.HIST_DATA_PAT }}
+
       - name: Run data push
         run: python TVS/push_tvs_data.py ${{ inputs.dry_run == true && '--dry-run' || '' }}
         env:
           TVS_PUSH_SECRET: ${{ secrets.TVS_PUSH_SECRET }}
+
+      - name: Upload live archive (closed months)
+        if: ${{ inputs.dry_run != true }}
+        continue-on-error: true
+        run: |
+          [ -f TVS/live_archive.json.gz ] || { echo "No archive produced — nothing to upload"; exit 0; }
+          gh release view live-archive --repo adityakumar-bikes/TVS-LDR-HistData >/dev/null 2>&1 || \
+            gh release create live-archive --repo adityakumar-bikes/TVS-LDR-HistData \
+              --title "Live archive" --notes "Per-lead rows of live months, kept so a month is never lost when it rolls out of the 3 rolling Drive sheets. Private; overwritten daily by the pipeline."
+          gh release upload live-archive TVS/live_archive.json.gz \
+            --repo adityakumar-bikes/TVS-LDR-HistData --clobber
+          echo "live archive size: $(du -sh TVS/live_archive.json.gz)"
+        env:
+          GH_TOKEN: ${{ secrets.HIST_DATA_PAT }}
 
       - name: Keep repo active
         run: |

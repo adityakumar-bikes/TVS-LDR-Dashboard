@@ -1,5 +1,6 @@
 # Historical data cache — stored privately, never committed here
 TVS/hist_cache.json.gz
+TVS/live_archive.json.gz
 
 # Local dev / pipeline artefacts
 TVS/push_tvs_data.bat

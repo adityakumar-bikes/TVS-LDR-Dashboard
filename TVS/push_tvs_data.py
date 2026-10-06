@@ -44,21 +44,22 @@ SECRET = os.environ.get("TVS_PUSH_SECRET", "")
 RETAILS_FILE_ID = '1ZWBlzxX-g2R5iCcrsGUWrqSvxIHcchFHtajDDPcFJgE'
 RETAILS_TAB     = 'Raw'
 
-# Live lead masters — each entry is authoritative for its month range only.
+# ── Live lead sources ─────────────────────────────────────────────────────────
+# MIS Automation maintains THREE rolling Google Sheets in the "Bike CPS Master Files"
+# Drive folder. Each sheet's ID is STABLE for its role, but its CONTENTS rotate at
+# month change (what was "current" becomes "Previous Month", and so on). All three
+# receive daily LMS-status updates, so ALL THREE are fetched on EVERY run:
 #
-# CLOSED months (frozen sheets — do NOT edit id/tab for closed entries):
-#   Jul'26  — dedicated July GSheet, rows hard-capped to Jul'26.
-#   Aug'26  — FROZEN snapshot committed at month-close (2026-09-01).
-#             This sheet must receive no new lead data; it is the permanent
-#             source for August leads from this point forward.
+#   offset  0  "TVS CPS Triggered LD LMS Status"                            (current month)
+#   offset -1  "TVS CPS Triggered LD LMS Status - Previous Month"           (T-1)
+#   offset -2  "TVS CPS Triggered LD LMS Status - Previous to Previous Month" (T-2)
 #
-# OPEN months:
-#   Sep'26  — current/live Lead Master (activated 2026-09-03).
-#             When October closes, set max_mo=2609, add frozen=True, and
-#             add a new Oct'26 entry.
+# A rolling sheet is filtered to ONE target month resolved at run time from the IST
+# calendar + the sheet's own contents (see _rolling_target_month) — no edit is needed
+# at month-end. A month that rolls out of the T-2 window is preserved automatically
+# by the private live archive (see _apply_live_archive), so nothing is ever dropped.
 #
-# min_mo / max_mo: month_order integers (YY*100+MM). None = no upper bound.
-# 'frozen': True documents closed months; has no runtime effect.
+# Month-named sheets ("... - Jul'26") are closed/frozen and never change:
 LEAD_SHEETS = [
     {
         'id':     '1gaRoPLebv7jaBgWEET-XSQuhqE_XgQlGru39TA-FoSo',
@@ -68,33 +69,31 @@ LEAD_SHEETS = [
         'max_mo': 2607,
         'frozen': True,
     },
-    # Aug'26 — FROZEN snapshot sheet (month closed 2026-09-01).
-    # Retail continues to update; lead rows are permanently fixed.
     {
-        'id':     '1Wp26qCv3d6oEq1h2wGamlHmCb9YuYrNDa8x8i653W3M',
-        'tab':    'TVS',
-        'label':  "Aug'26-LeadMaster-FROZEN",
-        'min_mo': 2608,
-        'max_mo': 2608,
-        'frozen': True,
+        'id':      '1iSw5zXF67q5Wkoz2mSPFqql9OPAcqmd0um5BEHUGf4o',
+        'tab':     'TVS',
+        'label':   'CPS-Current',
+        'rolling': True,
+        'offset':  0,
     },
-    # Sep'26 — current/open Lead Master (activated 2026-09-03).
-    # max_mo=None so it automatically covers Sep'26 and any later months
-    # until this entry is capped and a new month is added at close.
     {
-        'id':     '1iSw5zXF67q5Wkoz2mSPFqql9OPAcqmd0um5BEHUGf4o',
-        'tab':    'TVS',
-        'label':  "Sep'26-LeadMaster",
-        'min_mo': 2609,
-        'max_mo': None,   # open month — no upper bound until month-close
+        'id':      '1Wp26qCv3d6oEq1h2wGamlHmCb9YuYrNDa8x8i653W3M',
+        'tab':     'TVS',
+        'label':   'CPS-T1-PreviousMonth',
+        'rolling': True,
+        'offset':  -1,
+    },
+    {
+        'id':      '19n028-nRZqPo5wcv9pN737GvUlrcrUusXv9-F9lJsLo',
+        'tab':     'TVS',
+        'label':   'CPS-T2-PrevToPrevMonth',
+        'rolling': True,
+        'offset':  -2,
     },
 ]
 
-# Months whose Lead Master GSheet has not yet been provided.
-# The pipeline treats these as covered (no hard-fail for current-month) but
-# fetches 0 lead rows and prints a clear warning.
-# When a month's sheet is ready: add it to LEAD_SHEETS above and remove it here.
-PENDING_LEAD_MONTHS: set = set()  # Sep'26 activated 2026-09-03
+# Months whose Lead Master GSheet has not yet been provided (0 rows expected).
+PENDING_LEAD_MONTHS: set = set()
 
 # Bootstrap/DR only: local path to historical Excel files, used only when rebuilding
 # hist_cache.json.gz from scratch. Never accessed during normal production runs
@@ -2630,6 +2629,151 @@ def _load_source_metrics():
     return {}
 
 
+_IST = timezone(timedelta(hours=5, minutes=30))
+_ROLLING_MIN_ROWS = 1000     # a month needs this many rows to be trusted over the dominant one
+ARCHIVE_MIN_KEEP  = 0.90     # live month must hold >= this share of its archived rows
+LIVE_ARCHIVE_PATH = Path(__file__).parent / 'live_archive.json.gz'
+
+
+def _rolling_target_month(std_all, offset, label):
+    """Month_order a rolling sheet must be filtered to.
+
+    Preference: the IST calendar month (current + offset) when the sheet holds at least
+    _ROLLING_MIN_ROWS rows of it, or it is the sheet's dominant month. Otherwise fall back
+    to the sheet's dominant month — this covers the window around month-end when MIS has
+    not rotated the sheets yet, and the first hours of a month when only a few new rows exist.
+    """
+    now = datetime.now(_IST)
+    y, m = now.year, now.month + offset
+    while m < 1:
+        m += 12
+        y -= 1
+    expected = (y % 100) * 100 + m
+    _mo = std_all['LeadMonth'].apply(month_order)
+    counts = _mo[_mo > 0].value_counts()
+    if counts.empty:
+        print(f"  [{label}] rolling month: no parseable Lead_Month — using calendar month {expected}", flush=True)
+        return expected
+    dominant = int(counts.idxmax())
+    n_exp = int(counts.get(expected, 0))
+    chosen = expected if (dominant == expected or n_exp >= _ROLLING_MIN_ROWS) else dominant
+    print(f"  [{label}] rolling month: calendar-expected={expected} ({n_exp:,} rows), "
+          f"dominant={dominant} ({int(counts.max()):,} rows) -> using {chosen}", flush=True)
+    return chosen
+
+
+def _check_rolling_drop(label, filtered_n, target_mo, prev_metrics, threshold=0.80):
+    """Rolling sheets rotate at month-end, so compare only against the previous run's
+    count for the SAME target month. A sheet must never lose rows within a month."""
+    prev = prev_metrics.get(label)
+    if not isinstance(prev, dict) or prev.get('month') != target_mo or not prev.get('filtered_rows'):
+        print(f"  Source check [{label}]: {filtered_n:,} rows for month {target_mo} (no same-month baseline)", flush=True)
+        return
+    ratio = filtered_n / prev['filtered_rows']
+    if ratio < threshold:
+        _fail_exit(
+            f'Source completeness check — {label}',
+            f"Rows for month {target_mo} dropped from {prev['filtered_rows']:,} to {filtered_n:,} "
+            f'({ratio:.1%} of previous run; minimum acceptable: {threshold:.0%}). '
+            f'Likely an incomplete fetch or a partially cleared sheet.')
+    print(f"  Source check [{label}]: {filtered_n:,} rows for month {target_mo} "
+          f"(prev {prev['filtered_rows']:,}, {ratio:.1%}) ✓", flush=True)
+
+
+def _load_live_archive():
+    """{month_label: {'leads': [records], 'rtype': {lid: {...}}}} — private, never committed."""
+    if not LIVE_ARCHIVE_PATH.exists():
+        print("  Live archive: none found (first run — it will be created)", flush=True)
+        return {}
+    try:
+        with gzip.open(LIVE_ARCHIVE_PATH, 'rt', encoding='utf-8') as _f:
+            months = json.load(_f).get('months', {})
+        print("  Live archive: loaded " + ', '.join(
+            f"{k}={len(v.get('leads', [])):,}" for k, v in sorted(months.items(), key=lambda kv: month_order(kv[0]))),
+            flush=True)
+        return months
+    except Exception as _e:
+        print(f"  WARNING: live archive unreadable ({_e}); continuing without it", flush=True)
+        return {}
+
+
+def _save_live_archive(months):
+    try:
+        with gzip.open(LIVE_ARCHIVE_PATH, 'wt', encoding='utf-8', compresslevel=6) as _f:
+            json.dump({'generated': datetime.now(timezone.utc).isoformat(), 'months': months},
+                      _f, separators=(',', ':'))
+        print(f"  Live archive saved -> {LIVE_ARCHIVE_PATH.name} "
+              f"({LIVE_ARCHIVE_PATH.stat().st_size // 1024:,} KB)", flush=True)
+    except Exception as _e:
+        print(f"  WARNING: could not save live archive: {_e}", flush=True)
+
+
+def _apply_live_archive(lead_dfs, rtype_map, archive):
+    """Keep every live month: refresh the archive from live data, and restore any month
+    that is no longer in the live sheets (rolled out of the T-2 window) or whose live copy
+    is clearly incomplete. Returns (final lead_dfs, archive_changed)."""
+    live_all = pd.concat(lead_dfs, ignore_index=True) if lead_dfs else pd.DataFrame()
+    final, have, changed = [], set(), False
+    if len(live_all) and 'LeadMonth' in live_all.columns:
+        _mo_ord = live_all['LeadMonth'].apply(month_order)
+        pre = live_all[_mo_ord < ONLINE_START_ORDER]
+        if len(pre):
+            final.append(pre)
+        for mo, g in live_all[_mo_ord >= ONLINE_START_ORDER].groupby('LeadMonth'):
+            arch = archive.get(mo)
+            arch_n = len(arch['leads']) if arch else 0
+            if arch_n and len(g) < ARCHIVE_MIN_KEEP * arch_n:
+                print(f"  WARNING: live {mo!r} has {len(g):,} rows but the archive holds {arch_n:,} — "
+                      f"live copy looks incomplete; using the ARCHIVE for this month", flush=True)
+                continue
+            final.append(g)
+            have.add(mo)
+            g_arch = g.drop_duplicates(subset='SorceLeadId', keep='last')
+            lids = set(g_arch['SorceLeadId'])
+            archive[mo] = {'leads': g_arch.to_dict('records'),
+                           'rtype': {l: rtype_map[l] for l in lids if l in rtype_map}}
+            changed = True
+    for mo, a in sorted(archive.items(), key=lambda kv: month_order(kv[0])):
+        if mo in have or month_order(mo) < ONLINE_START_ORDER:
+            continue
+        final.append(pd.DataFrame(a['leads']))
+        rtype_map.update(a.get('rtype', {}))
+        print(f"  Restored {mo!r} from live archive: {len(a['leads']):,} leads "
+              f"(no longer in the live sheets)", flush=True)
+    return final, changed
+
+
+def _check_month_drop(payload, prod_path, threshold=0.90, min_prev=1000):
+    """Refuse to publish a payload in which any month has lost leads vs the live one.
+    Catches silent data loss (e.g. a month falling out of every source sheet)."""
+    if os.environ.get('TVS_ALLOW_MONTH_DROP') == '1':
+        print("  Month lead-count drop check SKIPPED (TVS_ALLOW_MONTH_DROP=1)", flush=True)
+        return
+    if not prod_path.exists():
+        return
+    try:
+        with gzip.open(prod_path, 'rt', encoding='utf-8') as _f:
+            old = json.load(_f)
+    except Exception as _e:
+        print(f"  WARNING: month drop check skipped — cannot read {prod_path.name}: {_e}", flush=True)
+        return
+
+    def _counts(p):
+        lm = p.get('maps', {}).get('lm', [])
+        return {lm[r[0]]: r[1] for r in p.get('monthly', []) if r[0] < len(lm)}
+
+    old_c, new_c = _counts(old), _counts(payload)
+    bad = [f"{mo}: {o:,} -> {new_c.get(mo, 0):,}" for mo, o in old_c.items()
+           if o >= min_prev and new_c.get(mo, 0) < threshold * o]
+    if bad:
+        _fail_exit(
+            'Month lead-count drop check',
+            f"Leads per month fell below {threshold:.0%} of the currently published payload: "
+            f"{'; '.join(bad)}. A source sheet probably lost a month. Production left unchanged. "
+            f"If this reduction is genuine, rerun with TVS_ALLOW_MONTH_DROP=1.")
+    print("  Month lead-count drop check passed ✓", flush=True)
+
+
 def _check_source_drop(label, current_count, prev_metrics, threshold=0.80):
     """Fail the run if current_count is below threshold * previous count.
     Silently passes if no baseline exists for this label.
@@ -2723,8 +2867,11 @@ def _fetch_and_process_lead_sheet(sheet, prev_metrics):
             else:
                 print(f"  [{_lbl}] STAGE 5 — LeadMonth column NOT present after standardize", flush=True)
 
-            _min = sheet.get('min_mo', ONLINE_START_ORDER)
-            _max = sheet.get('max_mo')
+            if sheet.get('rolling'):
+                _min = _max = _rolling_target_month(std_all, sheet.get('offset', 0), _lbl)
+            else:
+                _min = sheet.get('min_mo', ONLINE_START_ORDER)
+                _max = sheet.get('max_mo')
 
             std = std_all[std_all['LeadMonth'].apply(month_order) >= _min]
             if _max is not None:
@@ -2768,6 +2915,7 @@ def _fetch_and_process_lead_sheet(sheet, prev_metrics):
                 'std':           std,
                 'raw_len':       len(raw),
                 'filtered_len':  len(std),
+                'target_mo':     _min,
                 'duration_s':    _duration,
             }
 
@@ -3067,9 +3215,21 @@ for _sheet in LEAD_SHEETS:
     # Source metrics: compare RAW fetched count to baseline.
     # Blank Lead_Month rows filtered in STAGE 6 are empty sheet rows that Apps Script
     # includes via getLastRow() — NOT real data loss. Raw count confirms completeness.
-    _current_metrics[_lbl] = {'rows': _lr['raw_len'], 'filtered_rows': _lr['filtered_len']}
-    _check_source_drop(_lbl, _lr['raw_len'], _prev_metrics)
+    if _sheet.get('rolling'):
+        _tmo = _lr.get('target_mo')
+        _current_metrics[_lbl] = {'rows': _lr['raw_len'], 'filtered_rows': _lr['filtered_len'], 'month': _tmo}
+        _check_rolling_drop(_lbl, _lr['filtered_len'], _tmo, _prev_metrics)
+    else:
+        _current_metrics[_lbl] = {'rows': _lr['raw_len'], 'filtered_rows': _lr['filtered_len']}
+        _check_source_drop(_lbl, _lr['raw_len'], _prev_metrics)
     print(f"", flush=True)
+
+# Preserve every live month: refresh the private archive from the live sheets and restore
+# any month that has rolled out of the 3-sheet window (or whose live copy is incomplete).
+_archive = _load_live_archive()
+lead_dfs, _archive_changed = _apply_live_archive(lead_dfs, rtype_map, _archive)
+if _archive_changed:
+    _save_live_archive(_archive)
 
 # Override rtype from embedded sheet columns (DMS_Retail_Month / Retail By).
 # Only override when Retail By is non-empty AND retail month is Jul'26+ (ONLINE_START).
@@ -3405,6 +3565,8 @@ _prod_path    = _data_dir / 'tvs_payload.json.gz'
 _prev_path    = _data_dir / 'tvs_payload_prev.json.gz'
 _staging_path = _data_dir / f'tvs_payload_staging_{_RUN_START.strftime("%Y%m%d_%H%M")}.json.gz'
 _local_path   = Path(__file__).parent / 'tvs_last_payload.json'
+
+_check_month_drop(payload, _prod_path)
 
 
 # ── Serialise to local diagnostic copy (never committed) ──────────────────────
