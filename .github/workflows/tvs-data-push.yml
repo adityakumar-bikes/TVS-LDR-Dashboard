@@ -42,7 +42,7 @@ jobs:
       - name: Download historical cache
         run: |
           gh release download v1-data \
-            --repo adityakumar-bikes/TVS-LDR-HistData \
+            --repo ${{ github.repository_owner }}/TVS-LDR-HistData \
             --pattern "hist_cache.json.gz" \
             --dir TVS/
           echo "hist_cache size: $(du -sh TVS/hist_cache.json.gz)"
@@ -53,7 +53,7 @@ jobs:
         continue-on-error: true
         run: |
           gh release download live-archive \
-            --repo adityakumar-bikes/TVS-LDR-HistData \
+            --repo ${{ github.repository_owner }}/TVS-LDR-HistData \
             --pattern "live_archive.json.gz" \
             --dir TVS/ || echo "No live archive yet (first run) — it will be created"
         env:
@@ -69,11 +69,11 @@ jobs:
         continue-on-error: true
         run: |
           [ -f TVS/live_archive.json.gz ] || { echo "No archive produced — nothing to upload"; exit 0; }
-          gh release view live-archive --repo adityakumar-bikes/TVS-LDR-HistData >/dev/null 2>&1 || \
-            gh release create live-archive --repo adityakumar-bikes/TVS-LDR-HistData \
+          gh release view live-archive --repo ${{ github.repository_owner }}/TVS-LDR-HistData >/dev/null 2>&1 || \
+            gh release create live-archive --repo ${{ github.repository_owner }}/TVS-LDR-HistData \
               --title "Live archive" --notes "Per-lead rows of live months, kept so a month is never lost when it rolls out of the 3 rolling Drive sheets. Private; overwritten daily by the pipeline."
           gh release upload live-archive TVS/live_archive.json.gz \
-            --repo adityakumar-bikes/TVS-LDR-HistData --clobber
+            --repo ${{ github.repository_owner }}/TVS-LDR-HistData --clobber
           echo "live archive size: $(du -sh TVS/live_archive.json.gz)"
         env:
           GH_TOKEN: ${{ secrets.HIST_DATA_PAT }}
