@@ -48,8 +48,26 @@ def fetch_all(action, extra, page_size):
     return pd.DataFrame(rows, columns=headers)
 
 
+import threading
+results, errors = {}, {}
+
+def job(key, fn):
+    try:
+        results[key] = fn()
+    except Exception as e:
+        errors[key] = e
+
+jobs = [("__retail__", lambda: fetch_all("getCurrentRetails", {}, 2000))]
+for label, fid in SHEETS.items():
+    jobs.append((label, (lambda fid=fid: fetch_all("getSheetData", {"fileId": fid, "tabName": "TVS", "cols": COLS}, 3000))))
+ths = [threading.Thread(target=job, args=j, daemon=True) for j in jobs]
+for t in ths: t.start()
+for t in ths: t.join()
+if errors:
+    print("FETCH ERRORS:", {k: repr(v) for k, v in errors.items()}); sys.exit(1)
+
 print("== retail sheet (getCurrentRetails) ==", flush=True)
-ret = fetch_all("getCurrentRetails", {}, 2000)
+ret = results["__retail__"]
 print("columns:", list(ret.columns))
 ret["lid"] = ret["sourceLeadId"].map(to_id)
 ret = ret[ret["lid"] != ""]
@@ -64,7 +82,7 @@ retail_pm = dict(zip(ret["lid"], ret["pm_mon"]))
 
 for label, fid in SHEETS.items():
     print(f"\n== {label}  ({fid[:8]}…) ==", flush=True)
-    df = fetch_all("getSheetData", {"fileId": fid, "tabName": "TVS", "cols": COLS}, 3000)
+    df = results[label]
     df["lid"] = df["opty_id"].map(to_id)
     df = df[df["lid"] != ""]
     print(f"lead rows: {len(df):,}   cols: {list(df.columns)}")
