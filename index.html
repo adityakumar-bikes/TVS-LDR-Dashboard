@@ -571,9 +571,15 @@ function makeUnivFilter(filters) {
    Returns { miSiLi, siLi, byLi } or null when no PM filter is active. */
 function buildPmMaps(pmr, selPM, maps) {
   if (!selPM || !selPM.size || !pmr || !pmr.length) return null;
+  // The Purch. Model options are Retail-Dispersion FAMILY names (maps.dlm), while pmr indexes the
+  // canonical model list (maps.mdl). Resolve each selection as a canonical name OR a family name
+  // (maps.mdl_disp[i]), case-insensitively. A selection that resolves to nothing (e.g. "None")
+  // yields an empty overlay => zero retails, instead of silently behaving like "All".
+  const up = v => String(v == null ? '' : v).trim().toUpperCase().replace(/^TVS\s+/, '');
+  const want = new Set([...selPM].map(up));
+  const disp = maps.mdl_disp || [];
   const sel = new Set();
-  for (const pm of selPM) { const i = maps.mdl.indexOf(pm); if (i >= 0) sel.add(i); }
-  if (!sel.size) return null;
+  maps.mdl.forEach((name, i) => { if (want.has(up(name)) || want.has(up(disp[i]))) sel.add(i); });
   const m3 = new Map(), m2 = new Map(), m1 = new Map();
   for (const row of pmr) {
     const [pmi, mi, si, li, R, Rd, Rc] = row;
@@ -3932,6 +3938,9 @@ function App() {
         filters.cities && filters.cities.size > 0 && (tab === 'lt' || tab === 'model') && ce('div', {
           className:'fs-10',style:{color:'#92400E',background:'#FFF3CD',border:'1px solid #F5A623',borderRadius:8,padding:'5px 12px',marginBottom:8}
         }, '⚠ City filter is active — this tab does not support city filtering (no city-level matrix for this breakdown).'),
+        filters.purchasedModels && filters.purchasedModels.size > 0 && (tab === 'statexmodel' || tab === 'geodealer') && ce('div', {
+          className:'fs-10',style:{color:'#92400E',background:'#FFF3CD',border:'1px solid #F5A623',borderRadius:8,padding:'5px 12px',marginBottom:8}
+        }, '⚠ Purch. Model filter is active — this tab does not support it (purchased-model retails are not available by State/City/Dealer).'),
         isPending && ce('div', { className:'fs-11',style:{textAlign:'center',padding:8,color:'#94A3B8'} }, 'Filtering…'),
         tabContent
       )
@@ -4486,7 +4495,7 @@ const DispersionTab = React.memo(function DispersionTab({ data, filters, months,
    ════════════════════════════════════════════════════════════════════ */
 const COL_SEP = '\x00'; // null-char composite column key separator
 
-const PivotTab = React.memo(function PivotTab({ data, filters, months, RT }) {
+const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, pmMaps }) {
   const { maps } = data;
 
   const [rowDims,    setRowDims]    = useState(['mdl']);
@@ -4619,14 +4628,33 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT }) {
     return v === 0 ? '—' : v.toLocaleString();
   }
 
-  function accVals(tgt, cKey, row, nDims) {
+  // ov = optional [R, R_dms, R_co] purchased-model retail override for this row.
+  function accVals(tgt, cKey, row, nDims, ov) {
     if (!tgt.has(cKey)) tgt.set(cKey, [0, 0, 0, 0]);
     const c = tgt.get(cKey);
     c[0] += row[nDims]     || 0;
-    c[1] += row[nDims + 1] || 0;
-    c[2] += row[nDims + 2] || 0;
-    c[3] += row[nDims + 3] || 0;
+    c[1] += ov ? ov[0] : (row[nDims + 1] || 0);
+    c[2] += ov ? ov[1] : (row[nDims + 2] || 0);
+    c[3] += ov ? ov[2] : (row[nDims + 3] || 0);
   }
+
+  // Purch. Model filter: pmr only carries (enquired model, source, month), so retails can be
+  // restricted to the chosen purchased models exactly only when the pivot uses just those dims.
+  const pmInfo = useMemo(() => {
+    if (!pmMaps || !matConfig) return null;
+    const dims = matConfig.dims;
+    const pivotDims = [...rowDims, ...colDims];
+    const capable = pivotDims.every(d => d === 'mdl' || d === 'src' || d === 'lm');
+    let keyOf = null, map = null;
+    if (capable) {
+      const iM = dims.indexOf('mdl'), iS = dims.indexOf('src'), iL = dims.indexOf('lm');
+      if (iM >= 0 && iS >= 0 && iL >= 0) { map = pmMaps.miSiLi; keyOf = r => r[iM] + '|' + r[iS] + '|' + r[iL]; }
+      else if (iS >= 0 && iL >= 0)       { map = pmMaps.siLi;   keyOf = r => r[iS] + '|' + r[iL]; }
+      else if (iL >= 0)                  { map = pmMaps.byLi;   keyOf = r => '' + r[iL]; }
+    }
+    const otherFilters = (filters.states?.size > 0) || (filters.leadTypes?.size > 0) || (filters.cities?.size > 0);
+    return { keyOf, map, blocked: !keyOf, approx: !!keyOf && otherFilters };
+  }, [pmMaps, matConfig, rowDims, colDims, filters]);
 
   // tbl: Map<r1Label, { sub: Map<cKey,vals>, children: Map<r2Label, Map<cKey,vals>> }>
   // cKey is colDims[0] label when 1 col dim, or "c0\x00c1" when 2 col dims
@@ -4642,6 +4670,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT }) {
 
     const tbl    = new Map();
     const colSet = new Set();
+    const seenPM = new Set();   // each (model,source,month) purchased-model retail counted once
 
     for (const row of rawMatrix) {
       let ok = true;
@@ -4658,16 +4687,25 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT }) {
       const ck = cPos1 >= 0 ? c0 + COL_SEP + lbl(colDims[1], row[cPos1]) : c0;
       colSet.add(ck);
 
+      let ov = null;
+      if (pmInfo) {
+        if (pmInfo.keyOf) {
+          const k = pmInfo.keyOf(row);
+          if (seenPM.has(k)) ov = [0, 0, 0];
+          else { seenPM.add(k); ov = pmInfo.map.get(k) || [0, 0, 0]; }
+        } else ov = [0, 0, 0];
+      }
+
       if (!tbl.has(r1)) tbl.set(r1, { sub: new Map(), children: new Map() });
       const e = tbl.get(r1);
-      accVals(e.sub, ck, row, nDims);
+      accVals(e.sub, ck, row, nDims, ov);
       if (r2 !== null) {
         if (!e.children.has(r2)) e.children.set(r2, new Map());
-        accVals(e.children.get(r2), ck, row, nDims);
+        accVals(e.children.get(r2), ck, row, nDims, ov);
       }
     }
     return { tbl, colLabels: [...colSet] };
-  }, [rawMatrix, matConfig, rowDims, colDims, filterSets, maps]);
+  }, [rawMatrix, matConfig, rowDims, colDims, filterSets, maps, pmInfo]);
 
   const pm = metrics[0] || 'leads'; // primary metric drives column ordering + sorting
 
@@ -5037,6 +5075,13 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT }) {
       style:{ padding:'7px 14px', background:'#FFF3CD', border:'1px solid #F5A623',
               borderRadius:8, fontSize:12, color:'#92400E', marginBottom:12 }
     }, `⚠  ${unapplied.join(', ')} filter${unapplied.length>1?'s':''} not applied — not a dimension in this matrix.`),
+
+    pmInfo && (pmInfo.blocked || pmInfo.approx) && ce('div', {
+      style:{ padding:'7px 14px', background:'#FFF3CD', border:'1px solid #F5A623',
+              borderRadius:8, fontSize:12, color:'#92400E', marginBottom:12 }
+    }, pmInfo.blocked
+      ? '⚠  Purch. Model filter: purchased-model retails exist only by Model / Source / Month, so Retails, Retail %, DMS and Call-Out show "—" for this layout. Use only Model, Source and Month in Rows/Columns to see them.'
+      : '⚠  Purch. Model filter: retails are split by Model / Source / Month only — State, City and Lead Type filters are not applied to Retails.'),
 
     /* ── State messages ── */
     unsupported && ce('div', { style:{ textAlign:'center', padding:50, color:'#94A3B8', fontSize:14 } },
