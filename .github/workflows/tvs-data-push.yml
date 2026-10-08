@@ -56,6 +56,11 @@ jobs:
             --repo ${{ github.repository_owner }}/TVS-LDR-HistData \
             --pattern "live_archive.json.gz" \
             --dir TVS/ || echo "No live archive yet (first run) — it will be created"
+          # Optional one-off retail backfill (CSV export of an older retail-sheet version), if present
+          gh release download live-archive \
+            --repo ${{ github.repository_owner }}/TVS-LDR-HistData \
+            --pattern "retail_seed.csv.gz" \
+            --dir TVS/ 2>/dev/null || echo "No retail seed asset (normal)"
         env:
           GH_TOKEN: ${{ secrets.HIST_DATA_PAT }}
 

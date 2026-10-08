@@ -1324,7 +1324,7 @@ def proxy_get(action, extra_params=None, timeout=120):
 # ─── Sheet reader (paginated via Apps Script getSheetData) ────────────────────
 
 # Only these columns are needed from each lead sheet — reduces payload ~70%
-LEAD_COLS = 'opty_id,Lead_Month,Date,model,City,State,Dealer_Name,lead_type,Medium,Retail By,DMS_Retail_Month,Status_Name'
+LEAD_COLS = 'opty_id,Lead_Month,Date,model,City,State,Dealer_Name,lead_type,Medium,Retail By,DMS_Retail_Month,Ops_Retail_Month,Status_Name'
 
 # Page size: 3000 rows/page keeps each Apps Script execution under ~30 s,
 # narrowing the transient echo-URL window (302 bounce-back race condition).
@@ -1454,11 +1454,21 @@ def extract_rtype_map(raw_df):
     if 'DMS_Retail_Month' not in raw_df.columns:
         return rmap
     _unknown_rb: dict = {}
+    _EMPTY = ('', '-', '–', 'nan', 'None', '0')
+    _has_ops = 'Ops_Retail_Month' in raw_df.columns
     for _, row in raw_df.iterrows():
-        rm = str(row.get('DMS_Retail_Month', '') or '').strip()
-        if not rm: continue
+        rm  = str(row.get('DMS_Retail_Month', '') or '').strip()
+        ops = str(row.get('Ops_Retail_Month', '') or '').strip() if _has_ops else ''
+        if rm in _EMPTY:  rm = ''
+        if ops in _EMPTY: ops = ''
+        if not rm and not ops: continue
         lid = to_id(row.get('opty_id', ''))
         if not lid: continue
+        if not rm:
+            # Call-out (Ops) retail recorded only in Ops_Retail_Month. 'rtype' stays '' so existing
+            # retail entries are never type-overridden; 'inferred' is used only to CREATE a missing one.
+            rmap[lid] = {'rm': norm_month(ops), 'rtype': '', 'inferred': 'Call Out'}
+            continue
         _rb_raw = str(row.get('Retail By', '') or '').strip()
         _rb_u   = _rb_raw.upper()
         if 'DMS' in _rb_u:
@@ -1474,7 +1484,7 @@ def extract_rtype_map(raw_df):
             _rtype = ''
             if _rb_raw and _rb_raw not in ('-', '–', 'N/A', 'NA', 'na', 'n/a'):
                 _unknown_rb[_rb_raw] = _unknown_rb.get(_rb_raw, 0) + 1
-        rmap[lid] = {'rm': norm_month(rm), 'rtype': _rtype}
+        rmap[lid] = {'rm': norm_month(rm), 'rtype': _rtype, 'inferred': 'DMS'}
     if _unknown_rb:
         print(f"  NOTE: extract_rtype_map — unrecognized 'Retail By' values "
               f"(will be unclassified in aggregation): "
@@ -2680,14 +2690,22 @@ def _check_rolling_drop(label, filtered_n, target_mo, prev_metrics, threshold=0.
           f"(prev {prev['filtered_rows']:,}, {ratio:.1%}) ✓", flush=True)
 
 
+_LIVE_RETAIL = {}   # lid -> {'rm','rtype','pm'} — every retail ever seen (persisted in the live archive)
+
+
 def _load_live_archive():
-    """{month_label: {'leads': [records], 'rtype': {lid: {...}}}} — private, never committed."""
+    """{month_label: {'leads': [records], 'rtype': {lid: {...}}}} — private, never committed.
+    Also loads the persistent retail archive into _LIVE_RETAIL."""
+    global _LIVE_RETAIL
     if not LIVE_ARCHIVE_PATH.exists():
         print("  Live archive: none found (first run — it will be created)", flush=True)
         return {}
     try:
         with gzip.open(LIVE_ARCHIVE_PATH, 'rt', encoding='utf-8') as _f:
-            months = json.load(_f).get('months', {})
+            _d = json.load(_f)
+        months = _d.get('months', {})
+        _LIVE_RETAIL = _d.get('retail', {}) or {}
+        print(f"  Live archive: {len(_LIVE_RETAIL):,} archived retail entries")
         print("  Live archive: loaded " + ', '.join(
             f"{k}={len(v.get('leads', [])):,}" for k, v in sorted(months.items(), key=lambda kv: month_order(kv[0]))),
             flush=True)
@@ -2700,8 +2718,8 @@ def _load_live_archive():
 def _save_live_archive(months):
     try:
         with gzip.open(LIVE_ARCHIVE_PATH, 'wt', encoding='utf-8', compresslevel=6) as _f:
-            json.dump({'generated': datetime.now(timezone.utc).isoformat(), 'months': months},
-                      _f, separators=(',', ':'))
+            json.dump({'generated': datetime.now(timezone.utc).isoformat(), 'months': months,
+                       'retail': _LIVE_RETAIL}, _f, separators=(',', ':'))
         print(f"  Live archive saved -> {LIVE_ARCHIVE_PATH.name} "
               f"({LIVE_ARCHIVE_PATH.stat().st_size // 1024:,} KB)", flush=True)
     except Exception as _e:
@@ -2741,6 +2759,54 @@ def _apply_live_archive(lead_dfs, rtype_map, archive):
         print(f"  Restored {mo!r} from live archive: {len(a['leads']):,} leads "
               f"(no longer in the live sheets)", flush=True)
     return final, changed
+
+
+def _slim_retail(info):
+    return {k: info.get(k) for k in ('rm', 'rtype', 'pm') if info.get(k) is not None}
+
+
+def _merge_retail_archive(online_rmap):
+    """The retail sheet is NOT a complete history (MIS trims it: 86k -> 48k rows in Oct 2026), so keep
+    every retail ever seen. Entries in the sheet win; archived ones fill in what the sheet dropped."""
+    global _LIVE_RETAIL
+    restored = {lid: dict(v) for lid, v in _LIVE_RETAIL.items() if lid not in online_rmap}
+    merged = {**restored, **online_rmap}
+    _LIVE_RETAIL = {lid: _slim_retail(v) for lid, v in merged.items()}
+    print(f"  Retail archive: sheet {len(online_rmap):,} + restored {len(restored):,} "
+          f"(no longer in the sheet) = {len(merged):,}", flush=True)
+    return merged
+
+
+def _add_dump_retails(retail_map, rtype_map):
+    """Retail evidence carried by the lead dumps (DMS_Retail_Month / Ops_Retail_Month) for leads the
+    retail sheet does not list. Purchased model is unknown for these (reported as 'Unknown')."""
+    added = 0
+    for lid, info in rtype_map.items():
+        inf, rm = info.get('inferred'), info.get('rm', '')
+        if lid in retail_map or not inf or month_order(rm) < ONLINE_START_ORDER:
+            continue
+        retail_map[lid] = {'rm': rm, 'rtype': inf, 'pm': 'Unknown', 'rd': None}
+        _LIVE_RETAIL[lid] = _slim_retail(retail_map[lid])
+        added += 1
+    print(f"  Lead-dump retails added (missing from the retail sheet): {added:,}", flush=True)
+    return added
+
+
+def _load_retail_seed(path):
+    """Optional one-off backfill: a CSV export of an older version of the retail sheet. Lowest priority."""
+    global _LIVE_RETAIL
+    if not path.exists():
+        return 0
+    try:
+        seed_df = pd.read_csv(path, dtype=str, keep_default_na=False)
+        smap, _ = build_retail_map(seed_df)
+        new = {lid: _slim_retail(v) for lid, v in smap.items() if lid not in _LIVE_RETAIL}
+        _LIVE_RETAIL.update(new)
+        print(f"  Retail seed {path.name}: {len(smap):,} rows, {len(new):,} new entries added to the archive", flush=True)
+        return len(new)
+    except Exception as _e:
+        print(f"  WARNING: retail seed {path.name} could not be loaded: {_e}", flush=True)
+        return 0
 
 
 def _check_month_drop(payload, prod_path, threshold=0.90, min_prev=1000):
@@ -3111,6 +3177,11 @@ else:
 
 online_rmap, unexpected_call_types = build_retail_map(retail_df, rd_map=_rd_map)
 
+# The retail sheet is trimmed by MIS, so union it with every retail previously seen (sheet wins).
+_archive = _load_live_archive()
+_load_retail_seed(Path(__file__).parent / 'retail_seed.csv.gz')
+online_rmap = _merge_retail_archive(online_rmap)
+
 # Three-way merge: prioritised by data quality.
 #
 # CASE A — Jul'26+ (rm >= ONLINE_START):
@@ -3226,10 +3297,7 @@ for _sheet in LEAD_SHEETS:
 
 # Preserve every live month: refresh the private archive from the live sheets and restore
 # any month that has rolled out of the 3-sheet window (or whose live copy is incomplete).
-_archive = _load_live_archive()
 lead_dfs, _archive_changed = _apply_live_archive(lead_dfs, rtype_map, _archive)
-if _archive_changed:
-    _save_live_archive(_archive)
 
 # Override rtype from embedded sheet columns (DMS_Retail_Month / Retail By).
 # Only override when Retail By is non-empty AND retail month is Jul'26+ (ONLINE_START).
@@ -3243,6 +3311,10 @@ for lid, info in rtype_map.items():
             retail_map[lid]['rtype'] = info['rtype']
         if info['rm'] and not retail_map[lid]['rm']:
             retail_map[lid]['rm'] = info['rm']
+
+# Retails evidenced only by the lead dumps (sheet no longer lists them) — then persist the archive.
+_add_dump_retails(retail_map, rtype_map)
+_save_live_archive(_archive)
 
 # ── Step 5: Merge, gap-fill, aggregate, push ──────────────────────────────────
 print("\n[5/5] Merging leads, gap-fill, aggregating…", flush=True)
