@@ -3597,6 +3597,80 @@ const ModelPerfTab = React.memo(function ModelPerfTab({ data, filters, months, R
 /* ════════════════════════════════════════════════════════════════════
    APP ROOT
    ════════════════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════════════════════════
+   SAVED VIEWS  (per signed-in user, stored in this browser)
+   A view = tab + every filter + All/DMS/Call-Out + On-Create/Update + (Pivot) layout.
+   Stored under  tvs_ldr_views_v1:<email>  — each user only ever reads/writes their own key.
+   ════════════════════════════════════════════════════════════════════ */
+const VIEWS_KEY_PREFIX = 'tvs_ldr_views_v1:';
+const VIEW_FILTER_KEYS = ['months','leadTypes','sources','models','states','cities','purchasedModels'];
+const MAX_VIEWS = 20;
+function viewsKey(email) { return VIEWS_KEY_PREFIX + String(email || '').trim().toLowerCase(); }
+function loadViews(email) {
+  try {
+    const o = JSON.parse(localStorage.getItem(viewsKey(email)) || 'null');
+    if (o && Array.isArray(o.views)) return { views: o.views, defaultId: o.defaultId || null };
+  } catch(e) {}
+  return { views: [], defaultId: null };
+}
+function persistViews(email, st) {
+  try { localStorage.setItem(viewsKey(email), JSON.stringify(st)); return true; } catch(e) { return false; }
+}
+function snapFilters(f) {
+  const o = {};
+  for (const k of VIEW_FILTER_KEYS) { const x = f[k]; o[k] = x === FILTER_CLEARED ? '__NONE__' : [...(x || [])].sort(); }
+  return o;
+}
+function restoreFilters(o) {
+  const f = {};
+  for (const k of VIEW_FILTER_KEYS) { const v = o && o[k]; f[k] = v === '__NONE__' ? FILTER_CLEARED : new Set(Array.isArray(v) ? v : []); }
+  return f;
+}
+function viewSnapshot(tab, filters, RT, leadsMode, pivot) {
+  return { tab, filters: snapFilters(filters), RT, leadsMode, pivot: tab === 'pivot' ? (pivot || null) : null };
+}
+
+const ViewsBar = React.memo(function ViewsBar({ email, views, defaultId, activeId, onApply, onSave, onDelete, onDefault }) {
+  const [naming, setNaming] = useState(false);
+  const [name, setName]     = useState('');
+  function submit(ev) {
+    ev.preventDefault();
+    const n = name.trim();
+    if (!n) return;
+    onSave(n); setName(''); setNaming(false);
+  }
+  const chip = (v) => {
+    const active = v.id === activeId, isDef = v.id === defaultId;
+    return ce('span', { key:v.id, style:{ display:'inline-flex', alignItems:'center', borderRadius:20, overflow:'hidden',
+        border:'1px solid ' + (active ? '#003087' : '#CBD5E1'), background: active ? '#003087' : '#fff' } },
+      ce('button', { onClick:() => onApply(v), title:'Open this view' + (isDef ? ' (opens automatically)' : ''),
+          style:{ padding:'4px 10px', border:'none', background:'transparent', cursor:'pointer', fontFamily:'inherit',
+                  fontSize:11, fontWeight:700, color: active ? '#fff' : '#1E293B' } }, v.name),
+      ce('button', { onClick:() => onDefault(v.id), title: isDef ? 'Default view — click to unset' : 'Open this view automatically after sign-in',
+          style:{ padding:'4px 6px', border:'none', background:'transparent', cursor:'pointer', fontSize:12,
+                  color: isDef ? '#F59E0B' : (active ? '#CBD5E1' : '#94A3B8') } }, isDef ? '★' : '☆'),
+      ce('button', { onClick:() => { if (window.confirm('Delete view "' + v.name + '"?')) onDelete(v.id); }, title:'Delete this view',
+          style:{ padding:'4px 8px 4px 2px', border:'none', background:'transparent', cursor:'pointer', fontSize:11,
+                  color: active ? '#CBD5E1' : '#94A3B8' } }, '✕'));
+  };
+  return ce('div', { className:'card', style:{ padding:'8px 14px', marginBottom:10, display:'flex', alignItems:'center', flexWrap:'wrap', gap:8 } },
+    ce('span', { className:'fs-10', style:{ fontWeight:800, color:'#003087', textTransform:'uppercase', letterSpacing:'.08em', marginRight:4 } }, 'My Views'),
+    views.length === 0 && !naming && ce('span', { className:'fs-10', style:{ color:'#94A3B8' } },
+      'Set your filters, then save them as a view to reopen exactly this setup any day.'),
+    views.map(chip),
+    naming
+      ? ce('form', { onSubmit:submit, style:{ display:'inline-flex', gap:6, alignItems:'center' } },
+          ce('input', { autoFocus:true, value:name, onChange:e => setName(e.target.value), maxLength:40, placeholder:'View name…',
+              style:{ padding:'4px 10px', border:'1px solid #CBD5E1', borderRadius:20, fontSize:11, fontFamily:'inherit', outline:'none', width:170 } }),
+          ce('button', { type:'submit', className:'btn btn-secondary', style:{ fontSize:11, padding:'3px 12px' } }, 'Save'),
+          ce('button', { type:'button', className:'btn-ghost', style:{ fontSize:11 }, onClick:() => { setNaming(false); setName(''); } }, 'Cancel'))
+      : ce('button', { className:'btn btn-secondary', style:{ fontSize:11, padding:'3px 12px' },
+          onClick:() => setNaming(true), disabled: views.length >= MAX_VIEWS,
+          title: views.length >= MAX_VIEWS ? 'Maximum ' + MAX_VIEWS + ' views — delete one first' : 'Save the current tab and filters as a view' }, '＋ Save current view'),
+    ce('span', { className:'fs-9', style:{ marginLeft:'auto', color:'#94A3B8' }, title:'Views are stored in this browser and are private to the signed-in user' },
+      'Saved in this browser for ' + email));
+});
+
 const TABS = [
   { id:'overview',    label:'Overview' },
   { id:'source',      label:'Source Analysis' },
@@ -3778,9 +3852,52 @@ function App() {
     ? TABS.filter(t => ['modelxsrc','modelperf','statexmodel','geodealer','pivot'].includes(t.id))
     : TABS;
 
+  // ── Saved views (per user) ─────────────────────────────────────────
+  const [viewsState, setViewsState] = useState(() => auth ? loadViews(auth.email) : { views: [], defaultId: null });
+  const [pivotInit, setPivotInit]   = useState(null);   // layout to start the Pivot with (set when a view opens)
+  const [pivotLive, setPivotLive]   = useState(null);   // layout the Pivot is currently showing
+  const [viewKey, setViewKey]       = useState(0);      // bump to remount the Pivot with pivotInit
+  const autoViewDone = useRef(false);
+  useEffect(() => { setViewsState(auth ? loadViews(auth.email) : { views: [], defaultId: null }); autoViewDone.current = false; }, [auth && auth.email]);
+
+  const commitViews = useCallback(next => { setViewsState(next); if (auth) persistViews(auth.email, next); }, [auth]);
+  const applyView = useCallback(v => {
+    const allowed = visibleTabs.some(t => t.id === v.tab) ? v.tab : visibleTabs[0].id;
+    startT(() => {
+      setFilters(restoreFilters(v.filters));
+      setRT(['all','dms','co'].includes(v.RT) ? v.RT : 'all');
+      setLeadsMode(v.leadsMode === 'create' ? 'create' : 'update');
+      setPivotInit(v.pivot || null); setPivotLive(v.pivot || null); setViewKey(k => k + 1);
+      setTab(allowed);
+    });
+  }, [visibleTabs]);
+  const saveView = useCallback(name => {
+    const snap = viewSnapshot(tab, filters, RT, leadsMode, pivotLive);
+    const existing = viewsState.views.find(x => x.name.toLowerCase() === name.toLowerCase());
+    const view = { id: existing ? existing.id : 'v' + Date.now().toString(36), name, savedAt: new Date().toISOString(), ...snap };
+    const views = existing ? viewsState.views.map(x => x.id === existing.id ? view : x) : [...viewsState.views, view];
+    commitViews({ ...viewsState, views });
+  }, [tab, filters, RT, leadsMode, pivotLive, viewsState, commitViews]);
+  const deleteView = useCallback(id => {
+    commitViews({ views: viewsState.views.filter(x => x.id !== id), defaultId: viewsState.defaultId === id ? null : viewsState.defaultId });
+  }, [viewsState, commitViews]);
+  const setDefaultView = useCallback(id => commitViews({ ...viewsState, defaultId: viewsState.defaultId === id ? null : id }), [viewsState, commitViews]);
+  // Open the user's default view once, as soon as data is available.
+  useEffect(() => {
+    if (!data || autoViewDone.current || !viewsState.defaultId) return;
+    const v = viewsState.views.find(x => x.id === viewsState.defaultId);
+    autoViewDone.current = true;
+    if (v) applyView(v);
+  }, [data, viewsState.defaultId]);
+  const activeViewId = useMemo(() => {
+    const cur = JSON.stringify(viewSnapshot(tab, filters, RT, leadsMode, pivotLive));
+    const hit = viewsState.views.find(v => JSON.stringify(viewSnapshot(v.tab, restoreFilters(v.filters), v.RT, v.leadsMode, v.pivot)) === cur);
+    return hit ? hit.id : null;
+  }, [tab, filters, RT, leadsMode, pivotLive, viewsState]);
+
   const tabContent = useMemo(() => {
     if (!effectiveData) return null;
-    const props = { data: effectiveData, filters, months, RT, viewerMode, leadsMode, pmMaps };
+    const props = { data: effectiveData, filters, months, RT, viewerMode, leadsMode, pmMaps, pivotInit, onPivotCfg: setPivotLive };
     switch (tab) {
       case 'overview':    return ce(OverviewTab,      props);
       case 'source':      return ce(SourceTab,         props);
@@ -3791,11 +3908,11 @@ function App() {
       case 'geodealer':   return ce(GeoDealerTab,       props);
       case 'statusfunnel':return ce(StatusFunnelTab,    props);
       case 'dispersion':  return ce(DispersionTab,     props);
-      case 'pivot':       return ce(PivotTab,          props);
+      case 'pivot':       return ce(PivotTab,          { ...props, key: 'pivot' + viewKey });
       case 'ageing':      return ce(RetailAgeingTab,   props);
       default: return null;
     }
-  }, [effectiveData, tab, filters, months, RT, viewerMode, leadsMode]);
+  }, [effectiveData, tab, filters, months, RT, viewerMode, leadsMode, pivotInit, viewKey, pmMaps]);
 
   // ── Auth gate — early returns after all hooks ──────────────────────
   if (authChecking) return ce('div', {
@@ -3934,6 +4051,8 @@ function App() {
         ce('div', { className:'fs-13',style:{color:'#64748B'} }, 'Fetching data from Apps Script…')
       ),
       effectiveData && ce('div', null,
+        ce(ViewsBar, { email: auth.email, views: viewsState.views, defaultId: viewsState.defaultId, activeId: activeViewId,
+            onApply: applyView, onSave: saveView, onDelete: deleteView, onDefault: setDefaultView }),
         ce(FilterBar, { data:effectiveData, filters, onFiltersChange:f=>startT(()=>setFilters(f)), RT, setRT, viewerMode }),
         filters.cities && filters.cities.size > 0 && (tab === 'lt' || tab === 'model') && ce('div', {
           className:'fs-10',style:{color:'#92400E',background:'#FFF3CD',border:'1px solid #F5A623',borderRadius:8,padding:'5px 12px',marginBottom:8}
@@ -4495,15 +4614,21 @@ const DispersionTab = React.memo(function DispersionTab({ data, filters, months,
    ════════════════════════════════════════════════════════════════════ */
 const COL_SEP = '\x00'; // null-char composite column key separator
 
-const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, pmMaps }) {
+const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, pmMaps, pivotInit, onPivotCfg }) {
   const { maps } = data;
+  const _pi = pivotInit || {};
 
-  const [rowDims,    setRowDims]    = useState(['mdl']);
-  const [colDims,    setColDims]    = useState(['lm']);
-  const [metrics,    setMetrics]    = useState(['leads']);
-  const [sortBy,     setSortBy]     = useState('__total__');
-  const [sortDir,    setSortDir]    = useState('desc');
-  const [topN,       setTopN]       = useState(20);
+  const [rowDims,    setRowDims]    = useState(_pi.rowDims  || ['mdl']);
+  const [colDims,    setColDims]    = useState(_pi.colDims  || ['lm']);
+  const [metrics,    setMetrics]    = useState(_pi.metrics  || ['leads']);
+  const [sortBy,     setSortBy]     = useState(_pi.sortBy   || '__total__');
+  const [sortDir,    setSortDir]    = useState(_pi.sortDir  || 'desc');
+  const [topN,       setTopN]       = useState(_pi.topN != null ? _pi.topN : 20);
+
+  // Report the layout to the app so it can be saved as part of a view.
+  useEffect(() => {
+    if (onPivotCfg) onPivotCfg({ rowDims, colDims, metrics, sortBy, sortDir, topN });
+  }, [rowDims, colDims, metrics, sortBy, sortDir, topN]);
   const [collapsed,  setCollapsed]  = useState(new Set());
   const [addRowOpen, setAddRowOpen] = useState(false);
   const [addColOpen, setAddColOpen] = useState(false);
