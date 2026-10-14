@@ -38,7 +38,11 @@ MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov'
 
 import os
 
-APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwdTKif3l3gYJKMwZBO6PjmYgNbWulkQ9TMEIsN-6xMdG2efbndnSoHE4tC63Oe6AKmlQ/exec"
+# Data/access web app. Override with env TVS_APPS_SCRIPT_URL (e.g. the workflow's repository variable).
+APPS_SCRIPT_URL = os.environ.get("TVS_APPS_SCRIPT_URL") or "https://script.google.com/macros/s/AKfycbwdTKif3l3gYJKMwZBO6PjmYgNbWulkQ9TMEIsN-6xMdG2efbndnSoHE4tC63Oe6AKmlQ/exec"
+# The legacy "POST the finished payload to Apps Script -> Firebase" step is unused by the dashboard (it reads the
+# static data/tvs_payload.json.gz). Skipped unless TVS_SKIP_FIREBASE_POST=0.
+SKIP_FIREBASE_POST = os.environ.get("TVS_SKIP_FIREBASE_POST", "1") != "0"
 SECRET = os.environ.get("TVS_PUSH_SECRET", "")
 
 RETAILS_FILE_ID = '1ZWBlzxX-g2R5iCcrsGUWrqSvxIHcchFHtajDDPcFJgE'
@@ -3791,7 +3795,10 @@ print(f"\nPOSTing to Apps Script… ({len(_envelope) // 1024:,} KB compressed, "
 del _raw_bytes, _compressed, json_str
 
 body = None
-for _attempt in range(3):
+if SKIP_FIREBASE_POST:
+    print("  Firebase/Apps Script POST skipped (TVS_SKIP_FIREBASE_POST != 0) — payload is published via GitHub Pages only.", flush=True)
+    body = '{"ok": true, "skipped": true}'
+for _attempt in (range(0) if SKIP_FIREBASE_POST else range(3)):
     try:
         _resp = requests.post(
             APPS_SCRIPT_URL,
