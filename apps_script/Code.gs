@@ -1,9 +1,9 @@
 /**
- * TVS LDR — Access + Data service (single Google Apps Script web app)
+ * TVS LDR - Access + Data service (single Google Apps Script web app)
  *
  * Replaces the two legacy Apps Scripts that were owned by a departed employee:
- *   1. ACCESS  — who may open the dashboard (checkRole / requestAccess / admin panel actions)
- *   2. DATA    — read-only paged access to the Google Sheets the daily pipeline needs
+ *   1. ACCESS  - who may open the dashboard (checkRole / requestAccess / admin panel actions)
+ *   2. DATA    - read-only paged access to the Google Sheets the daily pipeline needs
  *
  * Deploy: Deploy > New deployment > Web app > Execute as: Me > Who has access: Anyone.
  * Re-deploy updates via Deploy > Manage deployments > Edit > Version: New version (the /exec URL is kept).
@@ -15,7 +15,7 @@
  * Roles: admin (only INITIAL_ADMINS below) > full > viewer.  pending / none / restricted are states, not roles.
  * SECURITY NOTE: admin actions are authorised by the supplied admin e-mail only (as in the legacy design;
  * Apps Script cannot verify the caller). To limit the blast radius, admin rights can NEVER be granted or
- * removed through the web interface — only by editing INITIAL_ADMINS here — so a spoofed call can approve
+ * removed through the web interface - only by editing INITIAL_ADMINS here - so a spoofed call can approve
  * or remove viewer/full users but cannot create admins.
  */
 
@@ -25,7 +25,7 @@ var RETAILS_FILE_ID = '1ZWBlzxX-g2R5iCcrsGUWrqSvxIHcchFHtajDDPcFJgE';
 var RETAILS_TAB     = 'Raw';
 var USER_PREFIX     = 'U:';
 
-// ───────────────────────── entry points ─────────────────────────
+// ------------------------- entry points -------------------------
 function doGet(e)  { return _out(_route((e && e.parameter) || {}, null)); }
 
 function doPost(e) {
@@ -49,11 +49,11 @@ function _out(obj) {
 function _route(p, body) {
   try {
     switch (p.action) {
-      // ── DATA (pipeline) ──
+      // -- DATA (pipeline) --
       case 'ping':             return _secretOk(p.secret) ? { ok: true, t: new Date().toISOString() } : { error: 'unauthorized' };
       case 'getSheetData':     return _secretOk(p.secret) ? getSheetData_(p) : { error: 'unauthorized' };
       case 'getCurrentRetails':return _secretOk(p.secret) ? getSheetData_({ fileId: RETAILS_FILE_ID, tabName: RETAILS_TAB, page: p.page, pageSize: p.pageSize }) : { error: 'unauthorized' };
-      // ── ACCESS (dashboard) ──
+      // -- ACCESS (dashboard) --
       case 'checkRole':        return { role: roleOf_(p.email) };
       case 'requestAccess':    return requestAccess_(p.email, p.name);
       case 'getPending':       return isAdmin_(p.email) ? { pending: listPending_() } : { error: 'forbidden' };
@@ -72,7 +72,7 @@ function _secretOk(s) {
   return !!want && String(s || '') === want;
 }
 
-// ───────────────────────── DATA: paged sheet reader ─────────────────────────
+// ------------------------- DATA: paged sheet reader -------------------------
 // Returns { headers:[...], rows:[[...]], total:<data rows>, done:<bool> }. Cell values are the *displayed*
 // text (so dates/months look exactly as in the sheet). Blank trailing rows are included, as before.
 function getSheetData_(p) {
@@ -107,7 +107,7 @@ function pickColumns_(headersAll, cols) {
   return out;
 }
 
-// ───────────────────────── ACCESS ─────────────────────────
+// ------------------------- ACCESS -------------------------
 function normEmail_(e) { return String(e || '').trim().toLowerCase(); }
 function domainOk_(email) { var d = email.split('@')[1] || ''; return ALLOWED_DOMAINS.indexOf(d) >= 0; }
 function isAdmin_(email) { email = normEmail_(email); return !!email && INITIAL_ADMINS.map(normEmail_).indexOf(email) >= 0; }
@@ -198,7 +198,7 @@ function updateRole_(targetEmail, role) {
   });
 }
 
-// ───────────────────────── admin helpers (run from the script editor) ─────────────────────────
+// ------------------------- admin helpers (run from the script editor) -------------------------
 /** Bulk-add existing users: edit the lists, select this function, press Run. */
 function addUsersManually() {
   var FULL   = [];   // e.g. ['name@girnarsoft.com']
