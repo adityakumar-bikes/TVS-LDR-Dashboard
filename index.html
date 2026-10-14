@@ -224,6 +224,25 @@ async function apiFetchRole(email, onProgress) {
   // All attempts exhausted. Wrap with actionable guidance.
   throw new Error('Access service is temporarily unavailable — this can happen while the daily data sync is running. Please try again in 1–2 minutes.');
 }
+// TEMPORARY resilience (2026-10-14): the access service (Apps Script) sometimes returns an error page
+// ("No such user"). If it cannot be reached, a user who was verified earlier in THIS browser may continue
+// with the role the service last confirmed. Only admin/full/viewer are ever remembered; pending,
+// restricted, unknown and brand-new users can never get in this way. Remove once the service is stable.
+const LASTROLE_PREFIX = 'tvs_ldr_lastrole:';
+const LASTROLE_MAX_AGE_MS = 30 * 24 * 3600 * 1000;
+function rememberRole(email, role) {
+  try {
+    if (['admin','full','viewer'].includes(role)) localStorage.setItem(LASTROLE_PREFIX + email, JSON.stringify({ role, t: Date.now() }));
+    else localStorage.removeItem(LASTROLE_PREFIX + email);   // revoked/pending: forget the old role immediately
+  } catch(e) {}
+}
+function recallRole(email) {
+  try {
+    const o = JSON.parse(localStorage.getItem(LASTROLE_PREFIX + email) || 'null');
+    if (o && ['admin','full','viewer'].includes(o.role) && Date.now() - o.t < LASTROLE_MAX_AGE_MS) return o.role;
+  } catch(e) {}
+  return null;
+}
 async function apiRequestAccess(email, name) {
   const r = await fetch(APPS_SCRIPT_URL + '?action=requestAccess', {
     method: 'POST',
@@ -2270,8 +2289,13 @@ function LoginScreen({ onLogin }) {
     try {
       const res = await apiFetchRole(e, (n, total) => setProg({ n, total }));
       if (res.error) throw new Error(res.error);
+      rememberRole(e, res.role);
       onLogin(e, '', res.role);
-    } catch(ex) { setErr('Could not verify access: ' + ex.message); }
+    } catch(ex) {
+      const cached = recallRole(e);
+      if (cached) onLogin(e, '', cached, true);   // access service unreachable — use the last verified role
+      else setErr('Could not verify access: ' + ex.message);
+    }
     finally { setLoading(false); }
   }
 
@@ -3721,8 +3745,8 @@ function App() {
   }, []);
 
   // ── Auth helpers ───────────────────────────────────────────────────
-  const handleLogin = useCallback((email, name, role) => {
-    const a = { email, name, role };
+  const handleLogin = useCallback((email, name, role, offline) => {
+    const a = offline ? { email, name, role, offline: true } : { email, name, role };
     setAuth(a);
     if (role === 'admin' || role === 'full' || role === 'viewer') {
       try { sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(a)); } catch(e) {}
@@ -3740,8 +3764,14 @@ function App() {
   // Verify cached session is still valid
   useEffect(() => {
     if (!auth) return;
+    if (!auth.offline) rememberRole(auth.email, auth.role);   // session was verified earlier — keep it for outages
     apiFetchRole(auth.email)
       .then(res => {
+        rememberRole(auth.email, res.role);
+        if (auth.offline && res.role === auth.role) {
+          const ok = { email: auth.email, name: auth.name, role: auth.role };
+          setAuth(ok); try { sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(ok)); } catch(e) {}
+        }
         if (res.role !== auth.role) {
           const updated = { ...auth, role: res.role };
           setAuth(updated);
@@ -4051,6 +4081,8 @@ function App() {
         ce('div', { className:'fs-13',style:{color:'#64748B'} }, 'Fetching data from Apps Script…')
       ),
       effectiveData && ce('div', null,
+        auth.offline && ce('div', { className:'fs-10', style:{ color:'#92400E', background:'#FFF3CD', border:'1px solid #F5A623', borderRadius:8, padding:'6px 12px', marginBottom:8 } },
+          '⚠ The access service is not responding, so you are signed in with the role it last confirmed for you in this browser. Admin Panel actions and access requests will not work until it is back.'),
         ce(ViewsBar, { email: auth.email, views: viewsState.views, defaultId: viewsState.defaultId, activeId: activeViewId,
             onApply: applyView, onSave: saveView, onDelete: deleteView, onDefault: setDefaultView }),
         ce(FilterBar, { data:effectiveData, filters, onFiltersChange:f=>startT(()=>setFilters(f)), RT, setRT, viewerMode }),
