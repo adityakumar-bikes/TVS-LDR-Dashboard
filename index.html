@@ -2348,7 +2348,15 @@ const BuyingIntentTab = React.memo(function BuyingIntentTab({ data, filters, mon
    ════════════════════════════════════════════════════════════════════ */
 const FilterBar = React.memo(function FilterBar({ data, filters, onFiltersChange, RT, setRT, viewerMode, tab }) {
   const { maps } = data;
-  const months    = useMemo(() => [...new Set(maps.lm)].sort((a,b) => monthOrder(b)-monthOrder(a)), [maps]);
+  // Months come from the data, but the current calendar month is always offered (and any gap up to it), so a new month shows up in the
+  // filter on day 1, before its first leads reach the sheets. Picking it simply shows zeros until data arrives.
+  const months    = useMemo(() => {
+    const s = new Set(maps.lm);
+    const now = new Date(), cur = (now.getFullYear() % 100) * 12 + now.getMonth();
+    let top = 0; for (const m of s) top = Math.max(top, monthOrder(m));
+    for (let k = top + 1; top > 0 && k <= cur; k++) s.add(MONTHS[k % 12] + "'" + String(Math.floor(k / 12)).padStart(2, '0'));
+    return [...s].sort((a,b) => monthOrder(b)-monthOrder(a));
+  }, [maps]);
   const leadTypes = useMemo(() => [...new Set(maps.lt)].sort(), [maps]);
   const sources   = useMemo(() => [...new Set(maps.src)].sort(), [maps]);
   const models    = useMemo(() => [...new Set(maps.mdl)].sort(), [maps]);
