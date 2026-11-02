@@ -71,6 +71,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.HIST_DATA_PAT }}
 
+      - name: Download exclusion list (private repo)
+        continue-on-error: true
+        run: |
+          gh release download config \
+            --repo ${{ github.repository_owner }}/TVS-LDR-HistData \
+            --pattern "excluded_enquiry_ids.txt" \
+            --dir TVS/ --clobber || echo "No exclusion list published - nothing excluded"
+        env:
+          GH_TOKEN: ${{ secrets.HIST_DATA_PAT }}
+
       - name: Download live archive (closed months)
         continue-on-error: true
         run: |

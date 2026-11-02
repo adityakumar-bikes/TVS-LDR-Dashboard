@@ -3670,6 +3670,19 @@ all_leads = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 # ── STAGE 8: after merge with historical ─────────────────────────────────────
 print(f"  STAGE 8 — after merge: hist={len(hist_leads):,}  online={len(online_leads):,}  combined={len(all_leads):,}", flush=True)
 
+# Permanent exclusion list: enquiries removed from the dashboard on request (lead AND retail; retails are counted only through their lead).
+# The IDs are lead-level data, so the file lives in the PRIVATE repo (release 'config'), is downloaded by the workflow and is gitignored.
+# Only the number of removed rows is ever printed.
+_EXCL_PATH = Path(__file__).parent / 'excluded_enquiry_ids.txt'
+if _EXCL_PATH.exists() and len(all_leads) > 0 and 'SorceLeadId' in all_leads.columns:
+    _excl = {to_id(x) for x in _EXCL_PATH.read_text(encoding='utf-8-sig').split() if x.strip() and not x.startswith('#')}
+    _excl.discard('')
+    _hit = all_leads['SorceLeadId'].map(to_id).isin(_excl)
+    print(f"  Exclusion list: {len(_excl):,} enquiry id(s) listed, {int(_hit.sum()):,} lead row(s) removed", flush=True)
+    all_leads = all_leads[~_hit]
+else:
+    print("  Exclusion list: none loaded", flush=True)
+
 # Deduplicate: same opty_id can appear in both hist Excel and online sheets.
 # keep='last' → online data wins for overlapping lids (more up-to-date).
 if len(all_leads) > 0 and 'SorceLeadId' in all_leads.columns:
