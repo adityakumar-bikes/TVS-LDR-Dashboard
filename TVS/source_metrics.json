@@ -1,6 +1,6 @@
 {
   "retail_raw": {
-    "rows": 152573
+    "rows": 153433
   },
   "Jul'26-LeadMaster": {
     "rows": 190649,
@@ -8,18 +8,18 @@
   },
   "CPS-Current": {
     "rows": 242736,
-    "filtered_rows": 242715,
-    "month": 2610
+    "filtered_rows": 7649,
+    "month": 2611
   },
   "CPS-T1-PreviousMonth": {
+    "rows": 249657,
+    "filtered_rows": 249636,
+    "month": 2610
+  },
+  "CPS-T2-PrevToPrevMonth": {
     "rows": 177078,
     "filtered_rows": 177073,
     "month": 2609
   },
-  "CPS-T2-PrevToPrevMonth": {
-    "rows": 157673,
-    "filtered_rows": 156762,
-    "month": 2608
-  },
-  "date": "2026-11-01"
+  "date": "2026-11-02"
 }
