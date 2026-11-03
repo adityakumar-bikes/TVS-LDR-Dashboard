@@ -5618,7 +5618,10 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     let best = null, bestScore = -1, bestVia = 99, bestExtra = 99;
     for (const m of ALL_MATS) {
       if (m.key === 'pmr' || m.key === 'pmx') continue;
-      if (!needed.every(d => m.dims.includes(d) || (d === 'st' && (m.dims.includes('city') || m.dims.includes('dl'))) || (d === 'city' && m.dims.includes('dl')))) continue;
+      // State / City shown as a field next to Dealer must be exact per row: a table that only has the dealer would put each dealer's whole
+      // volume under its main state / city, so it is not allowed there (State / City as a filter only can still follow the dealer).
+      const dlShown = needed.includes('dl');
+      if (!needed.every(d => m.dims.includes(d) || (d === 'st' && (m.dims.includes('city') || (m.dims.includes('dl') && !dlShown))) || (d === 'city' && m.dims.includes('dl') && !dlShown))) continue;
       const score = filterDims.filter(f => m.dims.includes(f)
         || (f === 'st'   && (m.dims.includes('city') || m.dims.includes('dl')))
         || (f === 'city' && m.dims.includes('dl'))).length;
