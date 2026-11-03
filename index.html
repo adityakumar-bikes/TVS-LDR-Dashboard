@@ -384,7 +384,24 @@ async function fetchData() {
   if (parsed.error) throw new Error('Server: ' + parsed.error);
   if (!parsed.maps || !parsed.monthly) throw new Error('Unexpected data format');
   normalizeCities(parsed);
+  deriveMxdl(parsed);
   return parsed;
+}
+
+// The payload carries State x Dealer x Model x Month (sdmx). Model x Dealer x Month (mxdl), used by Geo & Dealer and the Pivot,
+// is its sum over State, built here once on load.
+function deriveMxdl(data) {
+  for (const [src, dst] of [['sdmx', 'mxdl'], ['u_sdmx', 'u_mxdl']]) {
+    const t = data[src];
+    if (!t || !t.length || (data[dst] && data[dst].length)) continue;
+    const acc = new Map();
+    for (const r of t) {
+      const k = (r[2] * 100000 + r[1]) * 100 + r[3], ex = acc.get(k);
+      if (!ex) acc.set(k, [r[2], r[1], r[3], ...r.slice(4)]);
+      else for (let c = 4; c < r.length; c++) ex[c - 1] += r[c];
+    }
+    data[dst] = [...acc.values()];
+  }
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -4640,7 +4657,7 @@ function App() {
       mm: data.u_mm, stm: data.u_stm, zm: data.u_zm, bdm: data.u_bdm,
       mxst: data.u_mxst, mlt: data.u_mlt, stlt: data.u_stlt, disp: data.u_disp, pmr: data.u_pmr || [],
       stcm: data.u_stcm, univ: data.u_univ,
-      stdm: data.u_stdm, mxdl: data.u_mxdl, ltdl: data.u_ltdl,
+      stdm: data.u_stdm, mxdl: data.u_mxdl, sdmx: data.u_sdmx || [], ltdl: data.u_ltdl,
       cm: data.u_cm || [], csm: data.u_csm || [], cxm: data.u_cxm || [], cxsm: data.u_cxsm || [], cslt: data.u_cslt || [],
       cdm: data.u_cdm || [], cdsm: data.u_cdsm || [],
     };
@@ -5582,6 +5599,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     { key:'univ', dims:['mdl','src','st','lt','lm'] },
     { key:'stdm', dims:['st','dl','lm']          },
     { key:'mxdl', dims:['mdl','dl','lm']         },
+    { key:'sdmx', dims:['st','dl','mdl','lm']   },
     { key:'ltdl', dims:['lt','dl','lm']          },
     { key:'pmr',  dims:['pmd','mdl','src','lm']  },   // purchased model x enquired model x source x month (retails only)
     { key:'pmx',  dims: PMX_DIMS },   // same, with state / lead type / city (and dealer in v2) (retails only)
@@ -5618,6 +5636,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     let best = null, bestScore = -1, bestVia = 99, bestExtra = 99;
     for (const m of ALL_MATS) {
       if (m.key === 'pmr' || m.key === 'pmx') continue;
+      if (m.key === 'sdmx' && !(data.sdmx && data.sdmx.length)) continue;
       // State / City shown as a field next to Dealer must be exact per row: a table that only has the dealer would put each dealer's whole
       // volume under its main state / city, so it is not allowed there (State / City as a filter only can still follow the dealer).
       const dlShown = needed.includes('dl');

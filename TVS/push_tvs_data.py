@@ -2256,7 +2256,7 @@ def build_payload(all_leads, retail_map):
     stcm, u_stcm = {}, {}   # state × city × month
     univ, u_univ = {}, {}   # mdl × src × st × lt × month (universal — covers any non-city/dealer combo)
     stdm, u_stdm = {}, {}   # state × dealer × month
-    mxdl, u_mxdl = {}, {}  # model × dealer × month
+    sdmx, u_sdmx = {}, {}  # state × dealer × model × month (the model × dealer table is derived from it in the browser)
     ltdl, u_ltdl = {}, {}  # lead-type × dealer × month
     disp, u_disp = {}, {}   # enquired_model × disp_purchased_model × month (retails only)
     disp_mdl_idx, disp_mdl_arr = {}, []   # separate dimension: Retail Dispersion family names
@@ -2436,7 +2436,7 @@ def build_payload(all_leads, retail_map):
             bump(cdm,  f"{cti}|{dli}|{li}",      is_ret, rtype)
             bump(cdsm, f"{cti}|{dli}|{si}|{li}", is_ret, rtype)
             bump(stdm, f"{sti}|{dli}|{li}",       is_ret, rtype)
-            bump(mxdl, f"{mi}|{dli}|{li}",        is_ret, rtype)
+            bump(sdmx, f"{sti}|{dli}|{mi}|{li}", is_ret, rtype)
             bump(ltdl, f"{tti}|{dli}|{li}",       is_ret, rtype)
             # Status classification for Geo & Dealer tab (lead-level, not retail-level)
             # 'U' (unclassified) increments neither bucket — intentional.
@@ -2471,7 +2471,7 @@ def build_payload(all_leads, retail_map):
 
         if dl_col:
             ubump(u_stdm, f"{sti}|{dli}|{li}", f"{sti}|{dli}|{uli}", is_ret, rtype)
-            ubump(u_mxdl, f"{mi}|{dli}|{li}",  f"{mi}|{dli}|{uli}",  is_ret, rtype)
+            ubump(u_sdmx, f"{sti}|{dli}|{mi}|{li}", f"{sti}|{dli}|{mi}|{uli}", is_ret, rtype)
             ubump(u_ltdl, f"{tti}|{dli}|{li}", f"{tti}|{dli}|{uli}", is_ret, rtype)
             ubump(u_cdm,  f"{cti}|{dli}|{li}",      f"{cti}|{dli}|{uli}",      is_ret, rtype)
             ubump(u_cdsm, f"{cti}|{dli}|{si}|{li}", f"{cti}|{dli}|{si}|{uli}", is_ret, rtype)
@@ -2669,10 +2669,10 @@ def build_payload(all_leads, retail_map):
             "cdsm": to_rows(cdsm, lambda k: list(map(int, k.split('|')))),
             "dl_sn": [[*map(int,k.split('|')), *v] for k,v in dl_sn.items()],
             "stdm": to_rows(stdm, lambda k: list(map(int, k.split('|')))),
-            "mxdl": to_rows(mxdl, lambda k: list(map(int, k.split('|')))),
+            "sdmx": to_rows(sdmx, lambda k: list(map(int, k.split('|')))),
             "ltdl": to_rows(ltdl, lambda k: list(map(int, k.split('|')))),
             "u_stdm": to_rows(u_stdm, lambda k: list(map(int, k.split('|')))),
-            "u_mxdl": to_rows(u_mxdl, lambda k: list(map(int, k.split('|')))),
+            "u_sdmx": to_rows(u_sdmx, lambda k: list(map(int, k.split('|')))),
             "u_ltdl": to_rows(u_ltdl, lambda k: list(map(int, k.split('|')))),
             "u_cdm":  to_rows(u_cdm,  lambda k: list(map(int, k.split('|')))),
             "u_cdsm": to_rows(u_cdsm, lambda k: list(map(int, k.split('|'))))} if dl_col and dl_arr else {}),
