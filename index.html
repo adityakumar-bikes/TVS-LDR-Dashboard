@@ -6001,12 +6001,23 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
   }, [orderedCols, colDims]);
 
   const sm = sortM && metrics.includes(sortM) ? sortM : pm;   // metric the current column sort refers to
+  // Date as the first row field and no column sort picked yet (clicking a column arrow sets sortM): rows run in date order.
+  const noColSort = sortBy === '__total__' && !sortM;
+  const dateSeq = rowDims[0] === 'day' && noColSort;
+  const dateSeqChild = rowDims[1] === 'day' && noColSort;
   const sortedRows = useMemo(() => {
     if (!pivotResult) return [];
     const rows = [];
     for (const [label, entry] of pivotResult.tbl) {
       const total = rowTotal(entry.sub, sortBy === '__total__' || sortBy === '__label2__' ? sm : pm);
       rows.push({ label, entry, total });
+    }
+    // Dates are a sequence, not a ranking: oldest first; Top N keeps the latest N dates. 'No day' rows follow the dates.
+    if (dateSeq) {
+      const dated = rows.filter(r => /^\d/.test(String(r.label))).sort((a, b) => String(a.label).localeCompare(String(b.label)));
+      const undated = rows.filter(r => !/^\d/.test(String(r.label))).sort((a, b) => String(a.label).localeCompare(String(b.label)));
+      const shown = topN > 0 ? dated.slice(-topN) : dated;
+      return [...shown, ...(topN > 0 ? undated.slice(0, Math.max(0, topN - shown.length)) : undated)];
     }
     rows.sort((a, b) => {
       let av, bv, dir = sortDir;
@@ -6019,11 +6030,12 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       return dir === 'asc' ? av - bv : bv - av;
     });
     return topN > 0 ? rows.slice(0, topN) : rows;
-  }, [pivotResult, pm, sm, sortBy, sortDir, topN]);
+  }, [pivotResult, pm, sm, sortBy, sortDir, topN, dateSeq]);
 
   // Second row dimension (children) follows the same Sort by / Order as the first.
   function sortChildren(children) {
     const arr = [...children];
+    if (dateSeqChild) return arr.sort((a, b) => String(a[0]).localeCompare(String(b[0])));   // dates in sequence; 'No day' rows last
     arr.sort((a, b) => {
       let av, bv;
       if (sortBy === '__label__' || sortBy === '__label2__') { av = a[0]; bv = b[0]; }
@@ -6522,7 +6534,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
               title: dir === 'asc' ? 'Sort ascending' : 'Sort descending',
               onClick: e => { e.stopPropagation(); setSortBy(by); setSortM(m || null); setSortDir(dir); },
               style:{ cursor:'pointer', padding:'0 2px', fontSize:10,
-                      color: sortBy === by && sortDir === dir && (!m || sm === m) ? '#FDE047' : 'rgba(255,255,255,0.45)' }
+                      color: !dateSeq && !dateSeqChild && sortBy === by && sortDir === dir && (!m || sm === m) ? '#FDE047' : 'rgba(255,255,255,0.45)' }
             }, dir === 'asc' ? '\u25B2' : '\u25BC')));
 
           // "%" switch on number columns: show the column as % of subtotal
