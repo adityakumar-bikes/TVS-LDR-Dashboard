@@ -5615,7 +5615,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     // Rows / Columns must be in the table. State can also come from a City column (a city has one state); State / City
     // filters can also be applied through a dealer's main city. The table covering the most active filters wins;
     // filters it cannot cover are reported in the yellow notice.
-    let best = null, bestScore = -1, bestExtra = 99;
+    let best = null, bestScore = -1, bestVia = 99, bestExtra = 99;
     for (const m of ALL_MATS) {
       if (m.key === 'pmr' || m.key === 'pmx') continue;
       if (!needed.every(d => m.dims.includes(d) || (d === 'st' && (m.dims.includes('city') || m.dims.includes('dl'))) || (d === 'city' && m.dims.includes('dl')))) continue;
@@ -5623,8 +5623,11 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
         || (f === 'st'   && (m.dims.includes('city') || m.dims.includes('dl')))
         || (f === 'city' && m.dims.includes('dl'))).length;
       const extra = m.dims.filter(d => !needed.includes(d) && d !== 'lm').length;
-      if (score > bestScore || (score === bestScore && (extra < bestExtra || (extra === bestExtra && m.dims.length < (best?.dims.length ?? 99))))) {
-        bestScore = score; bestExtra = extra; best = m;
+      // State / City taken indirectly (State from a city, City from a dealer) is only approximate: a city name shared by two states carries
+      // one state. A table that has the field itself wins a tie, so State x Month reads the State tables, not City x Month.
+      const via = needed.filter(d => !m.dims.includes(d)).length + filterDims.filter(f => !m.dims.includes(f)).length;
+      if (score > bestScore || (score === bestScore && (via < bestVia || (via === bestVia && (extra < bestExtra || (extra === bestExtra && m.dims.length < (best?.dims.length ?? 99))))))) {
+        bestScore = score; bestVia = via; bestExtra = extra; best = m;
       }
     }
     return best;
