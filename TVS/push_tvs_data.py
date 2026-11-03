@@ -2282,7 +2282,6 @@ def build_payload(all_leads, retail_map):
     # Status_Name column and are silently skipped, so this naturally scopes itself to
     # "current month + T-1" without any month-range logic.
     snf = {}
-    cxm, u_cxm = {}, {}           # city × model × month
     cxsm, u_cxsm = {}, {}         # city × src × model × month (source-filterable)
     cslt, u_cslt = {}, {}         # city × src × lead-type × month (Pivot: City + Lead Type + Source)
     u_cm, u_csm = {}, {}          # city × month (retail-month attribution)
@@ -2400,7 +2399,6 @@ def build_payload(all_leads, retail_map):
         bump(bdm,     f"{bd}|{si}|{li}",   is_ret, rtype)
         bump(cm,      f"{cti}|{li}",           is_ret, rtype)
         bump(csm,     f"{cti}|{si}|{li}",   is_ret, rtype)
-        bump(cxm,     f"{cti}|{mi}|{li}",      is_ret, rtype)
         bump(cxsm,    f"{cti}|{si}|{mi}|{li}", is_ret, rtype)
         bump(cslt,    f"{cti}|{si}|{tti}|{li}", is_ret, rtype)
         bump(stcm,    f"{sti}|{cti}|{li}",  is_ret, rtype)
@@ -2468,7 +2466,6 @@ def build_payload(all_leads, retail_map):
         ubump(u_univ,    f"{mi}|{si}|{sti}|{tti}|{li}", f"{mi}|{si}|{sti}|{tti}|{uli}", is_ret, rtype)
         ubump(u_cm,  f"{cti}|{li}",         f"{cti}|{uli}",         is_ret, rtype)
         ubump(u_csm, f"{cti}|{si}|{li}",   f"{cti}|{si}|{uli}",   is_ret, rtype)
-        ubump(u_cxm,  f"{cti}|{mi}|{li}",      f"{cti}|{mi}|{uli}",      is_ret, rtype)
         ubump(u_cxsm, f"{cti}|{si}|{mi}|{li}", f"{cti}|{si}|{mi}|{uli}", is_ret, rtype)
         ubump(u_cslt, f"{cti}|{si}|{tti}|{li}", f"{cti}|{si}|{tti}|{uli}", is_ret, rtype)
 
@@ -2662,12 +2659,10 @@ def build_payload(all_leads, retail_map):
         'bdm':     to_rows(bdm, lambda k: [int(k.split('|')[0])] + list(map(int, k.split('|')[1:]))),
         'cm':      to_rows(cm,  lambda k: list(map(int, k.split('|')))),
         'csm':     to_rows(csm, lambda k: list(map(int, k.split('|')))),
-        'cxm':     to_rows(cxm,  lambda k: list(map(int, k.split('|')))),
         'cxsm':    to_rows(cxsm, lambda k: list(map(int, k.split('|')))),
         'cslt':    to_rows(cslt, lambda k: list(map(int, k.split('|')))),
         'u_cm':    to_rows(u_cm,   lambda k: list(map(int, k.split('|')))),
         'u_csm':   to_rows(u_csm,  lambda k: list(map(int, k.split('|')))),
-        'u_cxm':   to_rows(u_cxm,  lambda k: list(map(int, k.split('|')))),
         'u_cxsm':  to_rows(u_cxsm, lambda k: list(map(int, k.split('|')))),
         'u_cslt':  to_rows(u_cslt, lambda k: list(map(int, k.split('|')))),
         **({"cdm":  to_rows(cdm,  lambda k: list(map(int, k.split('|')))),
@@ -3675,7 +3670,7 @@ print(f"  STAGE 8 — after merge: hist={len(hist_leads):,}  online={len(online_
 # Only the number of removed rows is ever printed.
 _EXCL_PATH = Path(__file__).parent / 'excluded_enquiry_ids.txt'
 if _EXCL_PATH.exists() and len(all_leads) > 0 and 'SorceLeadId' in all_leads.columns:
-    _excl = {to_id(x) for x in _EXCL_PATH.read_text(encoding='utf-8-sig').split() if x.strip() and not x.startswith('#')}
+    _excl = {to_id(ln.strip()) for ln in _EXCL_PATH.read_text(encoding='utf-8-sig').splitlines() if ln.strip() and not ln.lstrip().startswith('#')}
     _excl.discard('')
     _hit = all_leads['SorceLeadId'].map(to_id).isin(_excl)
     print(f"  Exclusion list: {len(_excl):,} enquiry id(s) listed, {int(_hit.sum()):,} lead row(s) removed", flush=True)

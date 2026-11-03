@@ -3039,7 +3039,8 @@ const CityModelTab = React.memo(function CityModelTab({ data, filters, months, R
   // cxm  format: [city_idx, mdl_idx, lm_idx, L, R_all, R_dms, R_co]  (legacy, no source dim)
   const cxsm = data.cxsm || [];
   const cxm  = data.cxm  || [];
-  const useCxsm = cxsm.length > 0;        // prefer source-aware matrix when available
+  const useCxsm = cxsm.length > 0;        // prefer source-aware matrix when available (the legacy cxm is no longer in the payload)
+  const haveCx = useCxsm || cxm.length > 0;
   const getLR = useMemo(() => makeLR(data.rt_cols, RT), [data.rt_cols, RT]);
 
   const buildAgg = useCallback((monthSet) => {
@@ -3078,9 +3079,9 @@ const CityModelTab = React.memo(function CityModelTab({ data, filters, months, R
   }, [cxsm, cxm, useCxsm, maps, filters, getLR, data.rt_cols]);
 
   const summaryAgg = useMemo(() => {
-    if (cxm.length===0) return null;
+    if (!haveCx) return null;
     const a=buildAgg(new Set(months)); return a.grand.l>0?a:null;
-  }, [buildAgg, months, cxm]);
+  }, [buildAgg, months, haveCx]);
 
   const exportSummary = useCallback(() => {
     if (!summaryAgg) return;
@@ -3099,7 +3100,7 @@ const CityModelTab = React.memo(function CityModelTab({ data, filters, months, R
     exportXlsx({'City × Model':rows},'TVS_CityModel_All');
   }, [summaryAgg]);
 
-  if (cxm.length===0) return null;
+  if (!haveCx) return null;
 
   if (!summaryAgg) return null;
 
@@ -3197,10 +3198,11 @@ const GeoDealerTab = React.memo(function GeoDealerTab({ data, filters, months, R
         rec.leads += l; rec.rets += r;
       }
       const cityLeads2 = new Map();
-      if (hasMdlF && (data.cxm || []).length) {          // exact: all leads of the selected models in each city
-        for (const row of data.cxm) {
-          if (!altSet.has(maps.mdl[row[1]])) continue;
-          if (!allM && !monthSet.has(maps.lm[row[2]])) continue;
+      const cxRows = (data.cxm || []).length ? data.cxm : (data.cxsm || []), cxMo = (data.cxm || []).length ? 1 : 2;   // cxsm: [city, src, model, month, ...]
+      if (hasMdlF && cxRows.length) {          // exact: all leads of the selected models in each city
+        for (const row of cxRows) {
+          if (!altSet.has(maps.mdl[row[cxMo]])) continue;
+          if (!allM && !monthSet.has(maps.lm[row[cxMo + 1]])) continue;
           cityLeads2.set(row[0], (cityLeads2.get(row[0]) || 0) + row[row.length - 4]);
         }
       } else for (const [, rec] of dlMap) cityLeads2.set(rec.cti, (cityLeads2.get(rec.cti) || 0) + rec.leads);
@@ -5572,7 +5574,6 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     { key:'stlt', dims:['st','lt','lm']          },
     { key:'cm',   dims:['city','lm']             },
     { key:'csm',  dims:['city','src','lm']       },
-    { key:'cxm',  dims:['city','mdl','lm']          },
     { key:'cxsm', dims:['city','src','mdl','lm']   },
     { key:'cslt', dims:['city','src','lt','lm']    },
     { key:'cdm',  dims:['city','dl','lm']        },
