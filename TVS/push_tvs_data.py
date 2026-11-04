@@ -3870,6 +3870,11 @@ _local_path   = Path(__file__).parent / 'tvs_last_payload.json'
 
 _check_month_drop(payload, _prod_path)
 
+# Pack the big tables column by column (lossless; the browser unpacks them on load). The upload is about 55% smaller.
+import columnar
+_packed = columnar.encode_payload(payload)
+print(f"  Columnar packing: {len(_packed)} table(s) packed, {sum(_packed.values()):,} rows", flush=True)
+
 
 # ── Serialise to local diagnostic copy (never committed) ──────────────────────
 try:

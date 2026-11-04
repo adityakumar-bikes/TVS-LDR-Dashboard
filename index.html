@@ -383,9 +383,24 @@ async function fetchData() {
   catch (e) { throw new Error('JSON parse failed: ' + text.slice(0, 80)); }
   if (parsed.error) throw new Error('Server: ' + parsed.error);
   if (!parsed.maps || !parsed.monthly) throw new Error('Unexpected data format');
+  decodeColumnar(parsed);
   normalizeCities(parsed);
   deriveMxdl(parsed);
   return parsed;
+}
+
+// The pipeline sends its big tables packed column by column ({_col:1, n, d, c}): sorted rows, with the columns flagged in d stored as
+// differences from the previous value. This turns them back into plain rows. A table that is not packed is left as it is.
+function decodeColumnar(data) {
+  for (const k of Object.keys(data)) {
+    const t = data[k];
+    if (!t || t._col !== 1) continue;
+    const n = t.n, cols = t.c, w = cols.length;
+    for (let j = 0; j < w; j++) if (t.d[j]) { const c = cols[j]; let acc = 0; for (let i = 0; i < n; i++) { acc += c[i]; c[i] = acc; } }
+    const rows = new Array(n);
+    for (let i = 0; i < n; i++) { const r = new Array(w); for (let j = 0; j < w; j++) r[j] = cols[j][i]; rows[i] = r; }
+    data[k] = rows;
+  }
 }
 
 // The payload carries State x Dealer x Model x Month (sdmx). Model x Dealer x Month (mxdl), used by Geo & Dealer and the Pivot,
