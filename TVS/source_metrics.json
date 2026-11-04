@@ -8,7 +8,7 @@
   },
   "CPS-Current": {
     "rows": 242736,
-    "filtered_rows": 15283,
+    "filtered_rows": 23334,
     "month": 2611
   },
   "CPS-T1-PreviousMonth": {
@@ -18,8 +18,8 @@
   },
   "CPS-T2-PrevToPrevMonth": {
     "rows": 177078,
-    "filtered_rows": 177077,
+    "filtered_rows": 177073,
     "month": 2609
   },
-  "date": "2026-11-03"
+  "date": "2026-11-04"
 }
