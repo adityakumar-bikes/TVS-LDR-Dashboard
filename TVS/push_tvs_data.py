@@ -1090,6 +1090,7 @@ CANONICAL_TO_DISP_FAMILY: dict[str, str] = {
     'TVS XL100':              'TVS XL100',
     'TVS Star City Plus':     'TVS Star City Plus',
     'TVS Orbiter':            'TVS Orbiter',
+    'TVS X':                  'TVS X',
 }
 
 # Diagnostic: tracks raw model values that normalize to 'Unknown'.
@@ -1143,6 +1144,7 @@ def normalize_purchased_model(pm):
     if 'ORBITER' in pu or 'U546' in pu:                           return 'TVS Orbiter'
     if 'SPORT' in pu and 'TVS' not in pu.replace('TVS SPORT',''):return 'TVS Sport'
     if 'SPORT' in pu:                                             return 'TVS Sport'
+    if pu == 'TVS X' or pu.startswith('TVS X '):                  return 'TVS X'            # exact word only: 'TVS XL100' must not match (confirmed 2026-11-04)
     if 'XL 100' in pu or 'XL100' in pu:                          return 'TVS XL100'
     if 'ZEST' in pu:                                              return 'TVS Scooty Zest'
     if 'STAR CITY' in pu or 'STARCITY' in pu or 'CITY+' in pu:  return 'TVS Star City Plus'
@@ -2257,6 +2259,9 @@ def build_payload(all_leads, retail_map):
     univ, u_univ = {}, {}   # mdl × src × st × lt × month (universal — covers any non-city/dealer combo)
     stdm, u_stdm = {}, {}   # state × dealer × month
     sdmx, u_sdmx = {}, {}  # state × dealer × model × month (the model × dealer table is derived from it in the browser)
+    from array import array as _arr
+    _FU = {k: _arr('i') for k in ('st', 'ct', 'dl', 'src', 'mdl', 'lt', 'lm', 'um')}   # one record per lead -> full-cross table (universal.py)
+    _FU['rc'] = _arr('b')
     ltdl, u_ltdl = {}, {}  # lead-type × dealer × month
     disp, u_disp = {}, {}   # enquired_model × disp_purchased_model × month (retails only)
     disp_mdl_idx, disp_mdl_arr = {}, []   # separate dimension: Retail Dispersion family names
@@ -2472,6 +2477,10 @@ def build_payload(all_leads, retail_map):
         if dl_col:
             ubump(u_stdm, f"{sti}|{dli}|{li}", f"{sti}|{dli}|{uli}", is_ret, rtype)
             ubump(u_sdmx, f"{sti}|{dli}|{mi}|{li}", f"{sti}|{dli}|{mi}|{uli}", is_ret, rtype)
+            for _k, _v in (('st', sti), ('ct', cti), ('dl', dli), ('src', si), ('mdl', mi), ('lt', tti), ('lm', li), ('um', uli)):
+                _FU[_k].append(_v)
+            _ru = rtype.upper()
+            _FU['rc'].append(0 if not is_ret else 2 if 'DMS' in _ru else 3 if 'CALL' in _ru else 1)
             ubump(u_ltdl, f"{tti}|{dli}|{li}", f"{tti}|{dli}|{uli}", is_ret, rtype)
             ubump(u_cdm,  f"{cti}|{dli}|{li}",      f"{cti}|{dli}|{uli}",      is_ret, rtype)
             ubump(u_cdsm, f"{cti}|{dli}|{si}|{li}", f"{cti}|{dli}|{si}|{uli}", is_ret, rtype)
@@ -2596,6 +2605,19 @@ def build_payload(all_leads, retail_map):
         ddp = _ddp_new
         print(f"Day-on-Day: months without a usable daily date (collapsed to undated): {_dd_collapse}", flush=True)
 
+    _fu = _u_fu = []
+    if dl_col and dl_arr:
+        import universal
+        _fu = universal.build_rows(_FU, False)
+        _u_fu = universal.build_rows(_FU, True)
+        del _FU
+        for _nm, _rows, _ref in (('fu', _fu, monthly), ('u_fu', _u_fu, u_monthly)):     # must add up to the monthly totals exactly
+            _got = [sum(r[7 + j] for r in _rows) for j in range(4)]
+            _exp = [sum(v[j] for v in _ref.values()) for j in range(4)]
+            print(f"  Full-cross table {_nm}: {len(_rows):,} rows  leads/retails/DMS/CO = {_got}", flush=True)
+            if _got != _exp:
+                _fail_exit('Full-cross table reconciliation', f"{_nm} totals {_got} differ from the monthly totals {_exp}")
+
     maps_payload = {
         'lm': lm_arr, 'src': src_arr, 'lt': lt_arr, 'mdl': mdl_arr,
         'st': st_arr, 'zone': zone_arr, 'city': city_arr,
@@ -2670,6 +2692,7 @@ def build_payload(all_leads, retail_map):
             "dl_sn": [[*map(int,k.split('|')), *v] for k,v in dl_sn.items()],
             "stdm": to_rows(stdm, lambda k: list(map(int, k.split('|')))),
             "sdmx": to_rows(sdmx, lambda k: list(map(int, k.split('|')))),
+            "fu": _fu, "u_fu": _u_fu,
             "ltdl": to_rows(ltdl, lambda k: list(map(int, k.split('|')))),
             "u_stdm": to_rows(u_stdm, lambda k: list(map(int, k.split('|')))),
             "u_sdmx": to_rows(u_sdmx, lambda k: list(map(int, k.split('|')))),

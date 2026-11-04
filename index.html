@@ -391,15 +391,27 @@ async function fetchData() {
 
 // The pipeline sends its big tables packed column by column ({_col:1, n, d, c}): sorted rows, with the columns flagged in d stored as
 // differences from the previous value. This turns them back into plain rows. A table that is not packed is left as it is.
+function unpackTable(t) {
+    const n = t.n, cols = t.c, w = cols.length;
+    for (let j = 0; j < w; j++) if (t.d[j]) { const c = cols[j]; let acc = 0; for (let i = 0; i < n; i++) { acc += c[i]; c[i] = acc; } t.d[j] = 0; }
+    const rows = new Array(n);
+    for (let i = 0; i < n; i++) { const r = new Array(w); for (let j = 0; j < w; j++) r[j] = cols[j][i]; rows[i] = r; }
+    return rows;
+}
+// The full-cross tables are big and only the Pivot uses them: they stay packed until a Pivot layout needs one (rowsOf), and only the
+// last one used keeps its rows in memory.
+const LAZY_TABLES = new Set(['fu', 'u_fu']);
+let _lastLazy = null;
+function rowsOf(t) {
+  if (!t || t._col !== 1) return t;
+  if (!t._rows) { if (_lastLazy && _lastLazy !== t) _lastLazy._rows = null; t._rows = unpackTable(t); _lastLazy = t; }
+  return t._rows;
+}
 function decodeColumnar(data) {
   for (const k of Object.keys(data)) {
     const t = data[k];
-    if (!t || t._col !== 1) continue;
-    const n = t.n, cols = t.c, w = cols.length;
-    for (let j = 0; j < w; j++) if (t.d[j]) { const c = cols[j]; let acc = 0; for (let i = 0; i < n; i++) { acc += c[i]; c[i] = acc; } }
-    const rows = new Array(n);
-    for (let i = 0; i < n; i++) { const r = new Array(w); for (let j = 0; j < w; j++) r[j] = cols[j][i]; rows[i] = r; }
-    data[k] = rows;
+    if (!t || t._col !== 1 || LAZY_TABLES.has(k)) continue;
+    data[k] = unpackTable(t);
   }
 }
 
@@ -471,6 +483,7 @@ function normalizeCities(data) {
   // cityCol: which column holds the city index (0 for most; 1 for stcm)
   // numKeys: total number of key columns (remaining cols are L,R,DMS,CO)
   function remapMatrix(key, cityCol, numKeys) {
+    if (data[key] && data[key]._col === 1) data[key] = unpackTable(data[key]);   // a packed full-cross table: unpack it before rewriting its cities
     const mat = data[key];
     if (!mat || mat.length === 0) return;
     const acc = new Map();
@@ -499,7 +512,7 @@ function normalizeCities(data) {
     ['u_cm',  0, 2], ['u_csm', 0, 3], ['u_cxm',0, 3],
     ['u_stcm',1, 3], ['u_cdm', 0, 3], ['u_cdsm',0,4],
     ['dl_sn', 0, 3],
-    ['cslt', 0, 4], ['u_cslt', 0, 4], ['cxsm', 0, 4], ['u_cxsm', 0, 4],
+    ['cslt', 0, 4], ['u_cslt', 0, 4], ['cxsm', 0, 4], ['u_cxsm', 0, 4], ['fu', 1, 7], ['u_fu', 1, 7],
     ['pmx', 5, data.pmx_v >= 2 ? 9 : 8],      // [pmi, mi, si, sti, tti, cti, (dli,) create-month, retail-month, R, Rd, Rc]
     ['ram', 6, 9],                            // [dday, uday, mi, si, tti, sti, cti, pmi, rt, n, ...]
     ['snf', 2, data.snf_v === 2 ? 6 : 5],     // [status, src, city, model, lead-month, (lead type,) count]
@@ -4672,7 +4685,7 @@ function App() {
       mm: data.u_mm, stm: data.u_stm, zm: data.u_zm, bdm: data.u_bdm,
       mxst: data.u_mxst, mlt: data.u_mlt, stlt: data.u_stlt, disp: data.u_disp, pmr: data.u_pmr || [],
       stcm: data.u_stcm, univ: data.u_univ,
-      stdm: data.u_stdm, mxdl: data.u_mxdl, sdmx: data.u_sdmx || [], ltdl: data.u_ltdl,
+      stdm: data.u_stdm, mxdl: data.u_mxdl, sdmx: data.u_sdmx || [], fu: data.u_fu, ltdl: data.u_ltdl,
       cm: data.u_cm || [], csm: data.u_csm || [], cxm: data.u_cxm || [], cxsm: data.u_cxsm || [], cslt: data.u_cslt || [],
       cdm: data.u_cdm || [], cdsm: data.u_cdsm || [],
     };
@@ -5615,6 +5628,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     { key:'stdm', dims:['st','dl','lm']          },
     { key:'mxdl', dims:['mdl','dl','lm']         },
     { key:'sdmx', dims:['st','dl','mdl','lm']   },
+    { key:'fu',   dims:['st','city','dl','src','mdl','lt','lm'] },   // full cross: used only when no smaller table has every field
     { key:'ltdl', dims:['lt','dl','lm']          },
     { key:'pmr',  dims:['pmd','mdl','src','lm']  },   // purchased model x enquired model x source x month (retails only)
     { key:'pmx',  dims: PMX_DIMS },   // same, with state / lead type / city (and dealer in v2) (retails only)
@@ -5652,6 +5666,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     for (const m of ALL_MATS) {
       if (m.key === 'pmr' || m.key === 'pmx') continue;
       if (m.key === 'sdmx' && !(data.sdmx && data.sdmx.length)) continue;
+      if (m.key === 'fu' && !(data.fu && (data.fu._col === 1 ? data.fu.n : data.fu.length))) continue;
       // State / City shown as a field next to Dealer must be exact per row: a table that only has the dealer would put each dealer's whole
       // volume under its main state / city, so it is not allowed there (State / City as a filter only can still follow the dealer).
       const dlShown = needed.includes('dl');
@@ -5743,7 +5758,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       }
       return out;
     }
-    return data[matConfig.key] || [];
+    return rowsOf(data[matConfig.key]) || [];
   }, [data, matConfig, filters.purchasedModels, maps, pmxBase, pmFilterOn, ddMatrix]);
 
   // skipModels: Purch. Model retails replace the Model filter (the filter then applies to leads only).
