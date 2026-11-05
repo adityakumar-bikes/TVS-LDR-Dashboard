@@ -3902,7 +3902,7 @@ try:
     payload['vahan'] = vahan.build(_vh_json, _vh_from, _vh_thru, _vh_upd, payload, payload['maps'])
     _vh = payload['vahan']
     print(f"  Vahan gap: data {_vh['from']} to {_vh['through']}, updated {_vh['updated']}; {len(_vh['st'])} states, {len(_vh['ct'])} city groups; "
-          f"Vahan regs {sum(_vh['tot']['V']):,} (page says {_vh_json['stats']['tvs_regs']:,})", flush=True)
+          f"Vahan regs {sum(sum(x[:2]) for x in zip(*_vh['tot']['V'][:2])):,} (page says {_vh_json['stats']['tvs_regs']:,})", flush=True)
 except Exception as _e:
     print(f"  WARNING: Vahan gap block not refreshed ({_e}); keeping the previous one", flush=True)
     try:
