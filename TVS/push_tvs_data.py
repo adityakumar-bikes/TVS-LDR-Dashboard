@@ -3893,6 +3893,27 @@ _local_path   = Path(__file__).parent / 'tvs_last_payload.json'
 
 _check_month_drop(payload, _prod_path)
 
+# Vahan gap block: TVS registrations (Vahan) next to our leads / retails by state and city group. A page that cannot be read must not
+# stop the run: the previous block is kept (its "updated" date shows how old it is).
+try:
+    import vahan
+    _vh_html = vahan.fetch()
+    _vh_json, _vh_from, _vh_thru, _vh_upd = vahan.parse(_vh_html)
+    payload['vahan'] = vahan.build(_vh_json, _vh_from, _vh_thru, _vh_upd, payload, payload['maps'])
+    _vh = payload['vahan']
+    print(f"  Vahan gap: data {_vh['from']} to {_vh['through']}, updated {_vh['updated']}; {len(_vh['st'])} states, {len(_vh['ct'])} city groups; "
+          f"Vahan regs {sum(_vh['tot']['V']):,} (page says {_vh_json['stats']['tvs_regs']:,})", flush=True)
+except Exception as _e:
+    print(f"  WARNING: Vahan gap block not refreshed ({_e}); keeping the previous one", flush=True)
+    try:
+        if _prod_path.exists():
+            with gzip.open(_prod_path, 'rt', encoding='utf-8') as _pf:
+                _old_vh = json.load(_pf).get('vahan')
+            if _old_vh:
+                payload['vahan'] = _old_vh
+    except Exception as _e2:
+        print(f"  WARNING: previous Vahan block not readable either ({_e2})", flush=True)
+
 # Pack the big tables column by column (lossless; the browser unpacks them on load). The upload is about 55% smaller.
 import columnar
 _packed = columnar.encode_payload(payload)

@@ -4577,6 +4577,213 @@ const TatTab = React.memo(function TatTab({ data, filters, months, RT }) {
       matrixEl));
 });
 
+/* ════════════════════════════════════════════════════════════════════
+   VAHAN GAP TAB
+   Our share of leads / retails against TVS's share of Vahan registrations (the real market), by state and by city.
+   Data: data.vahan, built by the pipeline (TVS/vahan.py). Has its own State filter; the global filter bar is hidden here.
+   ════════════════════════════════════════════════════════════════════ */
+const VahanGapTab = React.memo(function VahanGapTab({ data }) {
+  const vh = data && data.vahan;
+  const nm = vh ? vh.months.length : 0;
+  const [view, setView]   = useState('state');
+  const [fuel, setFuel]   = useState('all');                 // all | ICE | EV
+  const [xl, setXl]       = useState(false);                // XL100 (Moped) instead of all TVS
+  const [sel, setSel]     = useState(null);                 // selected month positions (null = latest two)
+  const [stF, setStF]     = useState(new Set());            // State filter (empty = all states)
+  const [sort, setSort]   = useState({ k: 'gapL', dir: -1 });
+
+  // XL100: Vahan's Moped-class registrations exist only for some months (vh.xlm), so only those months can be compared
+  const xlSet = useMemo(() => new Set(vh ? vh.mkeys.map((k, j) => (vh.xlm || {})[k] ? j : -1).filter(j => j >= 0) : []), [vh]);
+  const months = useMemo(() => {
+    if (!vh) return [];
+    const base = sel && sel.length ? sel : [...Array(nm).keys()].slice(-2);
+    if (!xl) return base;
+    const m = base.filter(j => xlSet.has(j));
+    return m.length ? m : [...xlSet];
+  }, [vh, sel, nm, xl, xlSet]);
+
+  const calc = useMemo(() => {
+    if (!vh) return null;
+    const cap = vh.cap || {};
+    const fL = months.map(j => (cap[vh.mkeys[j]] || [1, 1])[0]);
+    const fR = months.map(j => (cap[vh.mkeys[j]] || [1, 1])[1]);
+    // one array per month for the chosen Fuel / Model: [ICE, EV, XL100] -> XL100 | ICE | EV | ICE + EV
+    const pick = x3 => xl ? x3[2] : fuel === 'ICE' ? x3[0] : fuel === 'EV' ? x3[1] : x3[0].map((v, j) => v + x3[1][j]);
+    const sumV = a => months.reduce((s, j) => s + (a[j] || 0), 0);
+    const sumL = a => months.reduce((s, j, i) => s + (a[j] || 0) * fL[i], 0);
+    const sumR = a => months.reduce((s, j, i) => s + (a[j] || 0) * fR[i], 0);
+    const TV = sumV(pick(vh.tot.V)), TL = sumL(pick(vh.tot.L)), TR = sumR(pick(vh.tot.R));
+    const mk = (name, state, v, l, r) => {
+      const V = sumV(v), L = sumL(l), R = sumR(r);
+      const vs = TV > 0 ? V / TV * 100 : 0, ls = TL > 0 ? L / TL * 100 : 0, rs = TR > 0 ? R / TR * 100 : 0;
+      const gapL = TV > 0 ? V / TV * TL - L : 0, gapR = TV > 0 ? V / TV * TR - R : 0;
+      const iL = vs > 0 ? ls / vs * 100 : null, iR = vs > 0 ? rs / vs * 100 : null;
+      const focus = iL == null ? '—' : iL < 90 ? 'Leads' : (iR != null && iR < 90) ? 'Conversion' : 'On par';
+      return { name, state, V, L, R, vs, ls, rs, iL, iR, gapL, gapR, l2r: L > 0 ? R / L * 100 : null, focus };
+    };
+    const stAll = vh.st.map(r => mk(r[0], r[0], pick(r[1]), pick(r[2]), pick(r[3])));
+    const ctAll = vh.ct.filter(r => !String(r[1]).startsWith('Rest of ')).map(r => mk(r[1], r[0], pick(r[2]), pick(r[3]), pick(r[4])));
+    const restV = vh.ct.filter(r => String(r[1]).startsWith('Rest of ')).reduce((s, r) => s + sumV(pick(r[2])), 0);
+    return { TV, TL, TR, stAll, ctAll, restV, partial: months.filter(j => (vh.cap || {})[vh.mkeys[j]]) };
+  }, [vh, months, fuel, xl]);
+
+  if (!vh || !calc) {
+    return ce('div', { className: 'card', style: { padding: '32px 28px', textAlign: 'center', color: '#64748B' } },
+      ce('div', { className: 'fs-14', style: { fontWeight: 700, marginBottom: 6, color: '#334155' } }, 'Vahan data is not in the dashboard yet'),
+      ce('div', { className: 'fs-12' }, 'It is added by the next data refresh.'));
+  }
+
+  const states = vh.st.map(r => r[0]).sort();
+  const stOn = stF && stF !== FILTER_CLEARED && stF.size > 0;
+  const stNone = stF === FILTER_CLEARED;
+  const inSt = r => stNone ? false : (!stOn || stF.has(r.state));
+
+  const rows0 = view === 'state' ? calc.stAll : calc.ctAll;
+  let rows = rows0.filter(inSt);
+  let note = '';
+  if (view === 'city') {
+    const under = rows.filter(r => r.gapL > 0).sort((a, b) => b.gapL - a.gapL);
+    note = under.length + ' under-indexed cities' + (under.length > 50 ? ' — showing the 50 with the largest lead gap' : '');
+    rows = under.slice(0, 50);
+  }
+  const sk = sort.k;
+  const val = (r, k) => k === 'name' ? r.name : k === 'state' ? r.state : k === 'focus' ? r.focus : (r[k] == null ? -Infinity : r[k]);
+  rows = [...rows].sort((a, b) => {
+    const x = val(a, sk), y = val(b, sk);
+    const c = typeof x === 'string' ? x.localeCompare(y) : x - y;
+    return c * sort.dir || b.gapL - a.gapL;
+  });
+
+  const tot = rows.reduce((t, r) => ({ V: t.V + r.V, L: t.L + r.L, R: t.R + r.R, gL: t.gL + r.gapL, gR: t.gR + r.gapR }), { V: 0, L: 0, R: 0, gL: 0, gR: 0 });
+  const underStates = calc.stAll.filter(r => r.gapL > 0);
+  const gapSum = underStates.reduce((s, r) => s + r.gapL, 0);
+
+  const fmt0 = n => Nf(Math.round(n));
+  const pc = n => n == null ? '—' : n.toFixed(1) + '%';
+  const pc2 = n => n == null ? '—' : n.toFixed(2) + '%';
+  const idxCol = n => n == null ? '#94A3B8' : n < 80 ? '#B91C1C' : n < 100 ? '#D97706' : '#15803D';
+  const gapTxt = n => (n > 0 ? '+' : n < 0 ? '−' : '') + fmt0(Math.abs(n));
+  const focusCol = { Leads: '#B91C1C', Conversion: '#7C3AED', 'On par': '#15803D' };
+  const dateTxt = s => { const d = new Date(s + 'T00:00:00'); return d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear(); };
+  const mLabel = j => vh.months[j] + ((vh.cap || {})[vh.mkeys[j]] ? '*' : '');
+  const periodTxt = months.map(mLabel).join(' + ');
+
+  const toggleMonth = j => {
+    const cur = new Set(months);
+    if (cur.has(j)) { if (cur.size > 1) cur.delete(j); } else cur.add(j);
+    setSel([...cur].sort((a, b) => a - b));
+  };
+  const pill = (on, onClick, label, key) => ce('button', { key, onClick,
+    style: { padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+      border: '1.5px solid ' + (on ? '#1a3a5c' : '#CBD5E1'), background: on ? '#1a3a5c' : '#fff', color: on ? '#fff' : '#475569' } }, label);
+  const head = (k, label, left, title) => ce('th', { key: k, className: left ? 'left' : undefined, title,
+    onClick: () => setSort(s => s.k === k ? { k, dir: -s.dir } : { k, dir: (k === 'name' || k === 'state' || k === 'focus') ? 1 : -1 }),
+    style: { cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none' } },
+    label, ce('span', { style: { opacity: sk === k ? 1 : 0.3, marginLeft: 3, fontSize: 9 } }, sk === k ? (sort.dir > 0 ? '▲' : '▼') : '⇅'));
+
+  const kpi = (label, value, sub, color) => ce('div', { style: { minWidth: 150 } },
+    ce('div', { className: 'fs-9', style: { color: '#64748B', fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase' } }, label),
+    ce('div', { className: 'fs-18', style: { fontWeight: 800, fontFamily: 'DM Mono,monospace', color: color || '#0f172a' } }, value),
+    sub && ce('div', { className: 'fs-10', style: { color: '#64748B' } }, sub));
+
+  return ce('div', { className: 'fade-up' },
+    ce('div', { className: 'card', style: { padding: '14px 18px', marginBottom: 14 } },
+      ce('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 18, alignItems: 'flex-end' } },
+        ce('div', { style: xl ? { opacity: 0.45 } : null, title: xl ? 'The XL100 is petrol (ICE) only' : '' },
+          ce('div', { className: 'fs-9', style: { color: '#64748B', fontWeight: 700, letterSpacing: '.06em', marginBottom: 6 } }, 'FUEL'),
+          ce('div', { style: { display: 'flex', gap: 6 } },
+            [['all', 'All'], ['ICE', 'ICE'], ['EV', 'EV']].map(([k, l]) => pill(!xl && fuel === k, () => { setXl(false); setFuel(k); }, l, 'f' + k)))),
+        ce('div', null,
+          ce('div', { className: 'fs-9', style: { color: '#64748B', fontWeight: 700, letterSpacing: '.06em', marginBottom: 6 } }, 'MODEL'),
+          ce('div', { style: { display: 'flex', gap: 6 } },
+            pill(!xl, () => setXl(false), 'All TVS', 'ma'), pill(xl, () => setXl(true), 'XL100 (Moped)', 'mx'))),
+        ce('div', null,
+          ce('div', { className: 'fs-9', style: { color: '#64748B', fontWeight: 700, letterSpacing: '.06em', marginBottom: 6 } }, 'VIEW'),
+          ce('div', { style: { display: 'flex', gap: 6 } },
+            pill(view === 'state', () => setView('state'), 'State view', 's'), pill(view === 'city', () => setView('city'), 'City view (top 50)', 'c'))),
+        ce('div', null,
+          ce('div', { className: 'fs-9', style: { color: '#64748B', fontWeight: 700, letterSpacing: '.06em', marginBottom: 6 } }, 'MONTHS (VAHAN DATA ' + dateTxt(vh.from).toUpperCase() + ' – ' + dateTxt(vh.through).toUpperCase() + ')'),
+          ce('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
+            vh.months.map((l, j) => (xl && !xlSet.has(j))
+            ? ce('button', { key: j, disabled: true, title: 'No XL100 (Moped) registrations from Vahan for this month',
+                style: { padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', border: '1.5px solid #E2E8F0', background: '#F8FAFC', color: '#CBD5E1', cursor: 'not-allowed' } }, mLabel(j))
+            : pill(months.includes(j), () => toggleMonth(j), mLabel(j), j)))),
+        ce('div', null,
+          ce('div', { className: 'fs-9', style: { color: '#64748B', fontWeight: 700, letterSpacing: '.06em', marginBottom: 6 } }, 'STATE'),
+          ce(MultiSelect, { label: 'State', options: states, selected: stF, onChange: setStF })),
+        ce('div', { style: { marginLeft: 'auto', textAlign: 'right' } },
+          ce('div', { className: 'fs-10', style: { color: '#64748B' } }, 'Vahan last updated'),
+          ce('div', { className: 'fs-13', style: { fontWeight: 700, color: '#334155' } }, dateTxt(vh.updated))))),
+
+    ce('div', { className: 'card', style: { padding: '14px 18px', marginBottom: 14, display: 'flex', flexWrap: 'wrap', gap: 28 } },
+      kpi((xl ? 'XL100 (Moped) regs' : fuel === 'all' ? 'TVS retails (Vahan)' : fuel + ' retails (Vahan)'), Nf(Math.round(calc.TV)), periodTxt + ' · all India'),
+      kpi('Our leads', Nf(Math.round(calc.TL)), calc.TV > 0 ? (calc.TL / calc.TV).toFixed(2) + ' leads per Vahan retail' : ''),
+      kpi('Our retails', Nf(Math.round(calc.TR)), calc.TV > 0 ? pc2(calc.TR / calc.TV * 100) + ' of Vahan retails' : ''),
+      kpi('Leads short of par', fmt0(gapSum), underStates.length + ' states under-indexed', '#B91C1C'),
+      calc.partial.length > 0 && kpi('Cut-off', dateTxt(vh.through), '* month pro-rated to this date', '#92400E')),
+
+    ce('div', { className: 'card', style: { padding: '14px 18px' } },
+      ce('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8, marginBottom: 8 } },
+        ce('div', { className: 'section-title', style: { marginBottom: 0 } },
+          (view === 'state' ? 'States' : 'Cities') + ' — where our share is below TVS’s share of Vahan registrations'),
+        ce('div', { className: 'fs-11', style: { color: '#64748B' } }, view === 'city' ? note : (rows.length + ' states, largest lead gap first'))),
+      rows.length === 0 && ce('div', { className: 'fs-12', style: { padding: 20, textAlign: 'center', color: '#94A3B8' } },
+        view === 'city' ? 'No under-indexed cities for this selection.' : 'No states selected.'),
+      rows.length > 0 && ce('div', { className: 'scroll-x' },
+        ce('table', null,
+          ce('thead', null, ce('tr', null,
+            ce('th', { className: 'left' }, '#'),
+            head('name', view === 'state' ? 'State' : 'City', true),
+            view === 'city' && head('state', 'State', true),
+            head('V', 'Vahan retails', false, 'TVS registrations in Vahan'),
+            head('vs', 'Vahan share', false, 'Share of all-India TVS registrations'),
+            head('L', 'Our leads'),
+            head('ls', 'Lead share', false, 'Share of all-India leads'),
+            head('iL', 'Lead index', false, 'Lead share ÷ Vahan share × 100. Below 100 = under-indexed'),
+            head('gapL', 'Lead gap', false, 'Leads we would have at par with Vahan share, minus actual leads'),
+            head('R', 'Our retails'),
+            head('rs', 'Retail share', false, 'Share of all-India retails'),
+            head('iR', 'Retail index', false, 'Retail share ÷ Vahan share × 100'),
+            head('gapR', 'Retail gap', false, 'Retails we would have at par with Vahan share, minus actual retails'),
+            head('l2r', 'L2R %'),
+            head('focus', 'Focus', false, 'Leads: lead index below 90 (marketing). Conversion: leads fine but retail index below 90 (calling). On par: both 90 or more')
+          )),
+          ce('tbody', null,
+            rows.map((r, i) => ce('tr', { key: r.state + '|' + r.name },
+              ce('td', { style: { color: '#94A3B8' } }, i + 1),
+              ce('td', { className: 'label', style: { whiteSpace: 'nowrap' } }, r.name),
+              view === 'city' && ce('td', { className: 'label', style: { color: '#64748B', whiteSpace: 'nowrap' } }, r.state),
+              ce('td', null, fmt0(r.V)), ce('td', null, pc2(r.vs)),
+              ce('td', null, fmt0(r.L)), ce('td', null, pc2(r.ls)),
+              ce('td', { style: { color: idxCol(r.iL), fontWeight: 700 } }, r.iL == null ? '—' : Math.round(r.iL)),
+              ce('td', { style: { color: r.gapL > 0 ? '#B91C1C' : '#15803D', fontWeight: 700 } }, gapTxt(r.gapL)),
+              ce('td', { style: { color: '#E31837', fontWeight: 700 } }, fmt0(r.R)), ce('td', null, pc2(r.rs)),
+              ce('td', { style: { color: idxCol(r.iR), fontWeight: 700 } }, r.iR == null ? '—' : Math.round(r.iR)),
+              ce('td', { style: { color: r.gapR > 0 ? '#B91C1C' : '#15803D', fontWeight: 700 } }, gapTxt(r.gapR)),
+              ce('td', { style: { color: '#D97706' } }, pc(r.l2r)),
+              ce('td', { style: { color: focusCol[r.focus] || '#64748B', fontWeight: 700 } }, r.focus)))),
+          ce('tfoot', null, ce('tr', { style: { fontWeight: 800, background: '#F1F5F9' } },
+            ce('td', null, ''), ce('td', { className: 'label' }, 'Total shown'), view === 'city' && ce('td', null, ''),
+            ce('td', null, fmt0(tot.V)), ce('td', null, pc2(calc.TV > 0 ? tot.V / calc.TV * 100 : 0)),
+            ce('td', null, fmt0(tot.L)), ce('td', null, pc2(calc.TL > 0 ? tot.L / calc.TL * 100 : 0)),
+            ce('td', null, tot.V > 0 && calc.TV > 0 && calc.TL > 0 ? Math.round((tot.L / calc.TL) / (tot.V / calc.TV) * 100) : '—'),
+            ce('td', null, gapTxt(tot.gL)),
+            ce('td', null, fmt0(tot.R)), ce('td', null, pc2(calc.TR > 0 ? tot.R / calc.TR * 100 : 0)),
+            ce('td', null, tot.V > 0 && calc.TV > 0 && calc.TR > 0 ? Math.round((tot.R / calc.TR) / (tot.V / calc.TV) * 100) : '—'),
+            ce('td', null, gapTxt(tot.gR)), ce('td', null, pc(tot.L > 0 ? tot.R / tot.L * 100 : null)), ce('td', null, ''))))),
+      ce('div', { className: 'fs-10', style: { color: '#64748B', marginTop: 10, lineHeight: 1.6 } },
+        ce('div', null, 'Like for like: Vahan covers ' + dateTxt(vh.from) + ' – ' + dateTxt(vh.through) + ' (updated ' + dateTxt(vh.updated) + '), so only those months are offered and our leads and retails are taken for the same months.' +
+          (calc.partial.length ? ' * The last month is only partly covered by Vahan, so our leads and retails for it are pro-rated to the same cut-off date.' : '')),
+        ce('div', null, 'Share = the row’s part of the all-India total for the selected months (the State filter only picks which rows to show; shares stay all-India). Index = our share ÷ Vahan share × 100, below 100 means under-indexed. Gap = what we would have at par with the Vahan share, minus what we have.'),
+        xl && ce('div', null, 'XL100: Vahan has no model data, so XL100 registrations = TVS registrations Vahan files under the Moped vehicle class (' + Object.values(vh.xlm || {}).join(', ') + '). Some RTOs file scooters as Moped (J&K looks like this) and some file the XL100 as a scooter (Goa, the North East), so treat it as an indicator, not an exact count. Our side = XL100 enquiries.'),
+        !xl && fuel !== 'all' && ce('div', null, 'Fuel follows the enquired model: EV = iQube and Orbiter enquiries, ICE = every other model. Vahan registrations use the registered fuel. (The Vahan page itself counts only the iQube as EV.)'),
+        ce('div', null, 'Retails are counted in the month they were retailed (On Update basis, the same basis as Vahan registrations) whatever the On Create / On Update toggle says. No model filter: Vahan has no model split.'),
+        view === 'city' && ce('div', null, 'Names that are one market (for example Bangalore, Bengaluru Urban) are grouped using the RTO ↔ city mapping on the Vahan page. Cities without a match sit under “Rest of <state>” and appear in the State view only (' + fmt0(calc.restV) + ' Vahan retails, ' + (calc.TV > 0 ? (calc.restV / calc.TV * 100).toFixed(1) : '0') + '% of all-India).')
+      )
+    )
+  );
+});
+
 const TABS = [
   { id:'overview',    label:'Overview' },
   { id:'daily',       label:'Day on Day' },
@@ -4586,6 +4793,7 @@ const TABS = [
   { id:'modelperf',   label:'Model Performance' },
   { id:'statexmodel', label:'Geo & Model' },
   { id:'geodealer',   label:'Geo & Dealer' },
+  { id:'vahan',       label:'Vahan Gap' },
   { id:'statusfunnel',label:'Status Funnel' },
   { id:'dispersion',  label:'Retail Dispersion' },
   { id:'pivot',       label:'Pivot Table' },
@@ -4800,6 +5008,7 @@ function App() {
       case 'modelperf':   return ce(ModelPerfTab,      props);
       case 'statexmodel': return ce(StateModelTab,     props);
       case 'geodealer':   return ce(GeoDealerTab,       props);
+      case 'vahan':       return ce(VahanGapTab,        props);
       case 'statusfunnel':return ce(StatusFunnelTab,    props);
       case 'dispersion':  return ce(DispersionTab,     props);
       case 'pivot':       return ce(PivotTab,          props);
@@ -4967,8 +5176,8 @@ function App() {
         ce('div', { className:'fs-13',style:{color:'#64748B'} }, 'Fetching data from Apps Script…')
       ),
       effectiveData && ce('div', null,
-        ce(FilterBar, { data:effectiveData, filters, onFiltersChange:f=>startT(()=>setFilters(f)), RT, setRT, viewerMode, tab }),
-        filterNotes.map((t, i) => ce('div', { key:'fn'+i,
+        tab !== 'vahan' && ce(FilterBar, { data:effectiveData, filters, onFiltersChange:f=>startT(()=>setFilters(f)), RT, setRT, viewerMode, tab }),
+        (tab === 'vahan' ? [] : filterNotes).map((t, i) => ce('div', { key:'fn'+i,
           className:'fs-10',style:{color:'#92400E',background:'#FFF3CD',border:'1px solid #F5A623',borderRadius:8,padding:'5px 12px',marginBottom:8}
         }, '⚠ ' + t)),
         isPending && ce('div', { className:'fs-11',style:{textAlign:'center',padding:8,color:'#94A3B8'} }, 'Filtering…'),
