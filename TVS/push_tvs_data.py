@@ -3718,6 +3718,27 @@ if 'LeadMonth' in all_leads.columns:
     for _lm_v, _lm_c in sorted(_final_lm.items(), key=lambda x: -x[1]):
         print(f"    {_lm_v!r:25s}: {_lm_c:,}", flush=True)
 
+# Retail reconciliation: retails are counted only through a real CRM lead (gap-fill is off), so any retail whose
+# enquiry id is in no lead source is NOT in the dashboard. Print how many, per retail month (counts only, no ids).
+try:
+    _lead_ids = set(all_leads['SorceLeadId'].map(to_id))
+    _rr = {}
+    for _lid, _inf in retail_map.items():
+        _m = _inf.get('rm') or '?'
+        if month_order(_m) < ONLINE_START_ORDER: continue
+        _d = _rr.setdefault(_m, [0, 0, {}])
+        _d[0] += 1
+        if _lid in _lead_ids: _d[1] += 1
+        else:
+            _cm = lid_to_month(_lid) or '?'
+            _d[2][_cm] = _d[2].get(_cm, 0) + 1
+    print("  RETAIL RECONCILIATION (retail map vs lead sources, live months):", flush=True)
+    for _m in sorted(_rr, key=month_order):
+        _t, _ok, _miss = _rr[_m]
+        print(f"    {_m:8s} retails in map={_t:,}  with lead={_ok:,}  NO LEAD={_t - _ok:,}  (no-lead by lead-id month: {dict(sorted(_miss.items(), key=lambda x: -x[1])[:6])})", flush=True)
+except Exception as _e:
+    print(f"  (retail reconciliation skipped: {_e})", flush=True)
+
 # Gap-fill is disabled: only real CRM leads appear in the dashboard.
 # Retails without a matching CRM lead are counted only when a real lead record exists.
 # This eliminates Unknown Source / Unknown Model / Unknown LeadType from all dimensions.
