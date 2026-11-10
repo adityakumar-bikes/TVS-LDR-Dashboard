@@ -3192,6 +3192,17 @@ def _fetch_and_process_lead_sheet(sheet, prev_metrics):
                 _min = sheet.get('min_mo', ONLINE_START_ORDER)
                 _max = sheet.get('max_mo')
 
+            if sheet.get('rolling') and _min and 'CreateDate' in std_all.columns:
+                # A lead's Lead_Month label can lag its real creation date (e.g. Lead_Month "Oct'2026" on a lead created
+                # 3 Nov). The sheet's own creation date (IST) wins: pull such rows into the sheet's target month.
+                _tgt_ym = f"{2000 + _min // 100:04d}-{_min % 100:02d}"
+                _lbl_tgt = f"{MONTH_NAMES[(_min % 100) - 1]}'{_min // 100:02d}"
+                _relab = (std_all['LeadMonth'].apply(month_order) != _min) & (std_all['CreateDate'].astype(str).str[:7] == _tgt_ym)
+                if _relab.any():
+                    print(f"  [{_lbl}] Lead_Month relabelled to {_lbl_tgt} from the creation date: {int(_relab.sum()):,} row(s) "
+                          f"(was {std_all.loc[_relab, 'LeadMonth'].value_counts().to_dict()})", flush=True)
+                    std_all.loc[_relab, 'LeadMonth'] = _lbl_tgt
+
             std = std_all[std_all['LeadMonth'].apply(month_order) >= _min]
             if _max is not None:
                 std = std[std['LeadMonth'].apply(month_order) <= _max]
