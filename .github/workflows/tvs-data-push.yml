@@ -145,5 +145,5 @@ jobs:
           git add TVS/unknown_model_diagnostic.json 2>/dev/null || true
           git rm --cached data/tvs_payload.json 2>/dev/null || true
           git diff --cached --quiet || git commit -m "chore: pipeline run $(date -u '+%Y-%m-%d')"
-          git pull --rebase
+          git pull --rebase -X theirs   # this run's files win over a concurrent bot commit (e.g. last_run.txt)
           git push
