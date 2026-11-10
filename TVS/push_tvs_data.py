@@ -3748,6 +3748,7 @@ if 'LeadMonth' in all_leads.columns:
 try:
     _lead_ids = set(all_leads['SorceLeadId'].map(to_id))
     _rr = {}
+    _nolead = []
     for _lid, _inf in retail_map.items():
         _m = _inf.get('rm') or '?'
         if month_order(_m) < ONLINE_START_ORDER: continue
@@ -3757,10 +3758,26 @@ try:
         else:
             _cm = lid_to_month(_lid) or '?'
             _d[2][_cm] = _d[2].get(_cm, 0) + 1
+            _nolead.append((_lid, _inf))
     print("  RETAIL RECONCILIATION (retail map vs lead sources, live months):", flush=True)
     for _m in sorted(_rr, key=month_order):
         _t, _ok, _miss = _rr[_m]
         print(f"    {_m:8s} retails in map={_t:,}  with lead={_ok:,}  NO LEAD={_t - _ok:,}  (no-lead by lead-id month: {dict(sorted(_miss.items(), key=lambda x: -x[1])[:6])})", flush=True)
+    # Row-level list for the private diagnostics release (never committed): every live-month retail with no CRM lead,
+    # with all the retail-sheet columns where the sheet still lists it.
+    import csv as _csv
+    _sheet_ix = {to_id(_v): _i for _i, _v in enumerate(retail_df['sourceLeadId'])} if 'sourceLeadId' in retail_df.columns else {}
+    _sheet_cols = list(retail_df.columns)
+    with open(Path(__file__).parent / 'retail_no_lead.csv', 'w', newline='', encoding='utf-8-sig') as _fh:
+        _w = _csv.writer(_fh)
+        _w.writerow(['retail_month', 'sourceLeadId', 'lead_id_month', 'call_type', 'purchased_model_normalised',
+                     'attribution_day', 'in_retail_sheet_now'] + _sheet_cols)
+        for _lid, _inf in sorted(_nolead, key=lambda x: (month_order(x[1].get('rm') or ''), x[0])):
+            _i = _sheet_ix.get(_lid)
+            _vals = [str(retail_df.iloc[_i][_c]) if _i is not None else '' for _c in _sheet_cols]
+            _w.writerow([_inf.get('rm', ''), _lid, lid_to_month(_lid), _inf.get('rtype', ''), _inf.get('pm', ''),
+                         _inf.get('ar') or '', 'Y' if _i is not None else 'N'] + _vals)
+    print(f"  Retail no-lead list written: {len(_nolead):,} row(s) -> retail_no_lead.csv (private diagnostics release)", flush=True)
 except Exception as _e:
     print(f"  (retail reconciliation skipped: {_e})", flush=True)
 

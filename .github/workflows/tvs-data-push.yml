@@ -109,12 +109,14 @@ jobs:
       - name: Upload Unknown purchased-model details (private repo)
         continue-on-error: true
         run: |
-          [ -f TVS/unknown_purchased_model_details.csv ] || { echo "No details file - nothing to upload"; exit 0; }
+          [ -f TVS/unknown_purchased_model_details.csv ] || [ -f TVS/retail_no_lead.csv ] || { echo "No details file - nothing to upload"; exit 0; }
           gh release view diagnostics --repo ${{ github.repository_owner }}/TVS-LDR-HistData >/dev/null 2>&1 || \
             gh release create diagnostics --repo ${{ github.repository_owner }}/TVS-LDR-HistData \
               --title "Diagnostics" --notes "Lead-level pipeline diagnostics. Private; overwritten by each run."
-          gh release upload diagnostics TVS/unknown_purchased_model_details.csv \
+          [ -f TVS/unknown_purchased_model_details.csv ] && gh release upload diagnostics TVS/unknown_purchased_model_details.csv \
             --repo ${{ github.repository_owner }}/TVS-LDR-HistData --clobber
+          [ -f TVS/retail_no_lead.csv ] && gh release upload diagnostics TVS/retail_no_lead.csv \
+            --repo ${{ github.repository_owner }}/TVS-LDR-HistData --clobber || true
         env:
           GH_TOKEN: ${{ secrets.HIST_DATA_PAT }}
 

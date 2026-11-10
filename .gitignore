@@ -2,6 +2,7 @@
 TVS/hist_cache.json.gz
 TVS/live_archive.json.gz
 TVS/retail_seed.csv.gz
+TVS/retail_no_lead.csv
 
 # Local dev / pipeline artefacts
 TVS/push_tvs_data.bat
