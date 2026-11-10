@@ -1508,6 +1508,7 @@ def standardize_leads(raw_df):
     if 'LeadMonth' in df.columns:
         df['LeadMonth'] = df['LeadMonth'].apply(parse_ym)
     if 'CreateDate' in df.columns:
+        df['CreateDate'] = df['CreateDate'].map(to_ist_date)
         empty_lm = df.get('LeadMonth', pd.Series(dtype=str)).str.strip() == ''
         if empty_lm.any():
             df.loc[empty_lm, 'LeadMonth'] = df.loc[empty_lm, 'CreateDate'].apply(parse_ym)
@@ -2180,6 +2181,19 @@ def load_hist_retail_map():
 
 _MON_NUM = {'Jan':1,'Feb':2,'Mar':3,'Apr':4,'May':5,'Jun':6,'Jul':7,'Aug':8,'Sep':9,'Oct':10,'Nov':11,'Dec':12}
 
+_UTC_TS_RE = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$')
+
+def to_ist_date(v):
+    """The Data Proxy sends sheet date cells as UTC instants ('2026-11-08T18:30:00.000Z' = IST midnight of 9 Nov).
+    Return the IST calendar date 'YYYY-MM-DD' for those; any other value is returned unchanged."""
+    s = str(v or '').strip()
+    if _UTC_TS_RE.match(s):
+        try:
+            return (datetime.strptime(s[:19], '%Y-%m-%dT%H:%M:%S') + timedelta(hours=5, minutes=30)).strftime('%Y-%m-%d')
+        except ValueError:
+            return s
+    return s
+
 def _day_int(v):
     """'2026-09-20' (or '2026-09-20T..') -> 20260920; None when the value is not a real date."""
     s = str(v or '').strip()[:10]
@@ -2333,7 +2347,7 @@ def build_payload(all_leads, retail_map):
     _zones  = _col('Zone', '0')
     _bds    = _col('BuyingDays', '0')
     _cities = _col('CityName')
-    _cds    = _col('CreateDate')   # Lead CreateDate — used for Retail Ageing only
+    _cds    = [to_ist_date(_x) for _x in _col('CreateDate')]   # Lead CreateDate (IST date) — Day-on-Day and Retail Ageing
     _dls    = all_leads[dl_col].fillna('').astype(str).values if dl_col and dl_col in _c else None
     _sns    = _col('StatusName')
     # latest 4 lead months get the full-granularity daily detail file
