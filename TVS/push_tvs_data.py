@@ -70,6 +70,14 @@ LEAD_SHEETS = [
         'frozen': True,
     },
     {
+        'id':     '1OSKBcGs9skTy_UDlOFRiFy3XHHwAVMQdwoCXYzYPGcI',
+        'tab':    'TVS',
+        'label':  "Aug'26-LeadMaster",
+        'min_mo': 2608,
+        'max_mo': 2608,
+        'frozen': True,
+    },
+    {
         'id':      '1iSw5zXF67q5Wkoz2mSPFqql9OPAcqmd0um5BEHUGf4o',
         'tab':     'TVS',
         'label':   'CPS-Current',
