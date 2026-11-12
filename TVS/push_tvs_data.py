@@ -3781,6 +3781,37 @@ try:
 except Exception as _e:
     print(f"  (retail reconciliation skipped: {_e})", flush=True)
 
+# Per-row trace of every Nov'26 retail-sheet row (private diagnostics release only, never committed): shows how each row
+# is keyed and whether it ends up counted on the dashboard (needs a real CRM lead; one entry per sourceLeadId).
+try:
+    import csv as _csv2
+    _lead_lm = dict(zip(all_leads['SorceLeadId'].map(to_id), all_leads['LeadMonth'])) if 'LeadMonth' in all_leads.columns else {}
+    _cols = list(retail_df.columns)
+    _keys = [to_id(_v) for _v in retail_df['sourceLeadId']] if 'sourceLeadId' in _cols else [''] * len(retail_df)
+    _kc = {}
+    for _k in _keys: _kc[_k] = _kc.get(_k, 0) + 1
+    _tgt = "Nov'26"
+    _n = _cnt = 0
+    with open(Path(__file__).parent / 'retail_nov26_trace.csv', 'w', newline='', encoding='utf-8-sig') as _fh:
+        _w = _csv2.writer(_fh)
+        _w.writerow(['key_sourceLeadId_used', 'rows_with_same_key', 'parsed_perf_month', 'map_rm', 'lead_found', 'lead_month',
+                     'counted_on_dashboard_nov26'] + ['c_' + _c for _c in _cols])
+        for _i, _k in enumerate(_keys):
+            _row = retail_df.iloc[_i]
+            _pm = parse_ym(_row.get('performanceMonth', '')) if 'performanceMonth' in _cols else ''
+            _pm2 = str(_row.get('Performance Month', '') or '').strip()
+            if _pm != _tgt and _pm2 != _tgt: continue
+            _inf = retail_map.get(_k)
+            _rm = (_inf or {}).get('rm', '')
+            _lf = _k in _lead_lm
+            _ok = bool(_k) and _lf and _rm == _tgt
+            _n += 1; _cnt += int(_ok)
+            _w.writerow([_k, _kc.get(_k, 0), _pm, _rm, 'Y' if _lf else 'N', _lead_lm.get(_k, ''), 'Y' if _ok else 'N']
+                        + [str(_row[_c]) for _c in _cols])
+    print(f"  Nov'26 retail trace: {_n:,} sheet rows, {_cnt:,} counted via a lead, {len({k for k in _keys if k}):,} distinct keys total -> retail_nov26_trace.csv", flush=True)
+except Exception as _e:
+    print(f"  (Nov'26 retail trace skipped: {_e})", flush=True)
+
 # Gap-fill is disabled: only real CRM leads appear in the dashboard.
 # Retails without a matching CRM lead are counted only when a real lead record exists.
 # This eliminates Unknown Source / Unknown Model / Unknown LeadType from all dimensions.
