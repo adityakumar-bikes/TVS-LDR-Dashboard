@@ -38,8 +38,6 @@ MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov'
 
 import os
 
-APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyfbjJ9EK6FAmIaw27wycAb7_cE92-yqT8DT91MyhVvyKF7xQUu_Pq4PIQZp98Jdj97/exec"
-SECRET = os.environ.get("TVS_PUSH_SECRET", "")
 
 RETAILS_FILE_ID = '1ZWBlzxX-g2R5iCcrsGUWrqSvxIHcchFHtajDDPcFJgE'
 RETAILS_TAB     = 'Raw'
@@ -1331,7 +1329,9 @@ _fetch_perf_lock = threading.Lock()
 # {headers, rows, done, total}. Date cells are rendered exactly as the old proxy did (wall-clock 'yyyy-MM-dd' at
 # midnight, else "yyyy-MM-ddTHH:mm:ss"); numbers stay numbers; integers beyond 2**53 are rounded like JavaScript.
 _SA_RAW = os.environ.get('GCP_SA_KEY', '').strip()
-_SA_INFO = json.loads(_SA_RAW) if _SA_RAW else None
+if not _SA_RAW:
+    sys.exit('GCP_SA_KEY is not set: the pipeline reads Google Sheets through the service account.')
+_SA_INFO = json.loads(_SA_RAW)
 _SA_TLS = threading.local()
 _SA_CACHE = {}
 _SA_LOCKS = {}
@@ -1463,17 +1463,11 @@ def _sheets_api_get(action, extra, timeout):
 
 
 def proxy_get(action, extra_params=None, timeout=120):
+    """Page of sheet data via the Google Sheets API (name kept for the callers)."""
     global _as_calls_total
-    if _SA_INFO:
-        return _sheets_api_get(action, extra_params, timeout)
     with _as_calls_lock:
         _as_calls_total += 1
-    params = {'action': action, 'secret': SECRET}
-    if extra_params:
-        params.update(extra_params)
-    resp = requests.get(APPS_SCRIPT_URL, params=params, timeout=timeout)
-    resp.raise_for_status()
-    return resp.json()
+    return _sheets_api_get(action, extra_params, timeout)
 
 # ─── Sheet reader (paginated via Apps Script getSheetData) ────────────────────
 
@@ -4301,38 +4295,9 @@ if DRY_RUN:
     print(f"\n{'=' * 60}", flush=True)
     sys.exit(0)
 
-# ── Compress payload for Firebase POST ────────────────────────────────────────
-_raw_bytes  = json_str.encode('utf-8')
-_compressed = gzip.compress(_raw_bytes, compresslevel=6)
-_envelope   = json.dumps({'gz': base64.b64encode(_compressed).decode('ascii')},
-                          separators=(',', ':'))
-print(f"\nPOSTing to Apps Script… ({len(_envelope) // 1024:,} KB compressed, "
-      f"was {len(json_str) // 1024:,} KB raw)", flush=True)
-del _raw_bytes, _compressed, json_str
-
-body = None
-for _attempt in range(0 if _SA_INFO else 3):
-    try:
-        _resp = requests.post(
-            APPS_SCRIPT_URL,
-            data=_envelope.encode('utf-8'),
-            params={'secret': SECRET},
-            headers={'Content-Type': 'application/json'},
-            timeout=(60, 1800),
-        )
-        _resp.raise_for_status()
-        body = _resp.text
-        break
-    except Exception as _e:
-        print(f"  POST attempt {_attempt + 1} failed: {_e}", flush=True)
-        if _attempt < 2:
-            print("  Retrying in 30s…", flush=True)
-            time.sleep(30)
-        else:
-            traceback.print_exc()
-            _fail_exit('Firebase POST (all 3 attempts exhausted)', str(_e), _staging_path)
-if _SA_INFO:
-    body = '{"ok": true, "note": "Sheets API mode - no Apps Script POST"}'
+del json_str
+# No external POST any more: the payload files are committed to the repo and served by Vercel.
+body = '{"ok": true, "note": "payload published via repo commit"}'
 print(f"Response: {body[:500]}{'…' if body and len(body) > 500 else ''}", flush=True)
 
 # ── Validate Apps Script response ─────────────────────────────────────────────
