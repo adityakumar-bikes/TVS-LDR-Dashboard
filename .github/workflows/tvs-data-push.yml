@@ -64,7 +64,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install requests pandas openpyxl pyxlsb
+        run: pip install requests pandas openpyxl pyxlsb google-auth
 
       - name: Download historical cache
         run: |
@@ -105,6 +105,7 @@ jobs:
         run: python TVS/push_tvs_data.py ${{ inputs.dry_run == true && '--dry-run' || '' }}
         env:
           TVS_PUSH_SECRET: ${{ secrets.TVS_PUSH_SECRET }}
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
 
       - name: Upload Unknown purchased-model details (private repo)
         continue-on-error: true

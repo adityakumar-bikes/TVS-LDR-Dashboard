@@ -1325,8 +1325,147 @@ _fetch_perf      = {}              # {label: {duration_s, rows}} — populated b
 _fetch_perf_lock = threading.Lock()
 
 
+# ─── Direct Google Sheets API reader (replaces the Apps Script proxy when GCP_SA_KEY is set) ───────────────────
+# The service account's JSON key comes from the GCP_SA_KEY secret (never printed). Each sheet is read once, only the
+# wanted columns, with batchGet; pages are then served from memory so every caller keeps the proxy's page contract
+# {headers, rows, done, total}. Date cells are rendered exactly as the old proxy did (wall-clock 'yyyy-MM-dd' at
+# midnight, else "yyyy-MM-ddTHH:mm:ss"); numbers stay numbers; integers beyond 2**53 are rounded like JavaScript.
+_SA_RAW = os.environ.get('GCP_SA_KEY', '').strip()
+_SA_INFO = json.loads(_SA_RAW) if _SA_RAW else None
+_SA_TLS = threading.local()
+_SA_CACHE = {}
+_SA_LOCKS = {}
+_SA_LOCKS_GUARD = threading.Lock()
+
+
+def _sa_session():
+    sess = getattr(_SA_TLS, 'sess', None)
+    if sess is None:
+        from google.oauth2 import service_account
+        from google.auth.transport.requests import AuthorizedSession
+        creds = service_account.Credentials.from_service_account_info(
+            _SA_INFO, scopes=['https://www.googleapis.com/auth/spreadsheets.readonly'])
+        sess = _SA_TLS.sess = AuthorizedSession(creds)
+    return sess
+
+
+def _sa_col_letter(i):
+    s_ = ''
+    i += 1
+    while i:
+        i, r = divmod(i - 1, 26)
+        s_ = chr(65 + r) + s_
+    return s_
+
+
+def _sa_cell(v, is_date):
+    if isinstance(v, bool) or v is None:
+        return v
+    if isinstance(v, (int, float)):
+        if is_date:
+            _dt = datetime(1899, 12, 30) + timedelta(seconds=round(float(v) * 86400))
+            if _dt.hour == 0 and _dt.minute == 0 and _dt.second == 0:
+                return _dt.strftime('%Y-%m-%d')
+            return _dt.strftime('%Y-%m-%dT%H:%M:%S')
+        if abs(v) >= 2 ** 53:
+            import decimal
+            return int(decimal.Decimal(repr(float(v))))
+        if isinstance(v, float) and v == int(v):
+            return int(v)
+    return v
+
+
+def _sa_load(file_id, tab_name, cols_csv, timeout):
+    key = (file_id, tab_name or '', cols_csv or '')
+    with _SA_LOCKS_GUARD:
+        lock = _SA_LOCKS.setdefault(key, threading.Lock())
+    with lock:
+        if key in _SA_CACHE:
+            return _SA_CACHE[key]
+        sess = _sa_session()
+        base = f"https://sheets.googleapis.com/v4/spreadsheets/{file_id}"
+        t0 = time.monotonic()
+        meta = sess.get(base, params={'fields': 'sheets.properties(title,index)'}, timeout=timeout)
+        if meta.status_code != 200:
+            raise RuntimeError(f"Sheets API {meta.status_code}: {meta.text[:200]}")
+        titles = [x['properties']['title'] for x in sorted(meta.json()['sheets'], key=lambda x: x['properties']['index'])]
+        tab = tab_name or titles[0]
+        if tab not in titles:
+            raise RuntimeError(f"sheet not found: {tab}")
+        q = "'" + tab.replace("'", "''") + "'"
+        # header (row 1) + number formats of row 2 -> which columns hold real dates
+        hr = sess.get(base, params={'ranges': f"{q}!1:2", 'includeGridData': 'true',
+                                    'fields': 'sheets.data.rowData.values(formattedValue,effectiveFormat.numberFormat.type)'},
+                      timeout=timeout)
+        if hr.status_code != 200:
+            raise RuntimeError(f"Sheets API {hr.status_code}: {hr.text[:200]}")
+        rd = hr.json()['sheets'][0]['data'][0].get('rowData', [])
+        h_cells = rd[0].get('values', []) if rd else []
+        f_cells = rd[1].get('values', []) if len(rd) > 1 else []
+        header = [str(c.get('formattedValue', '')).strip() for c in h_cells]
+        while header and header[-1] == '':
+            header.pop()
+        wanted = [c.strip() for c in cols_csv.split(',')] if cols_csv else list(header)
+        idx, heads = [], []
+        low = [h_.lower() for h_ in header]
+        for c in wanted:
+            i = header.index(c) if c in header else (low.index(c.lower()) if c.lower() in low else -1)
+            if i >= 0:
+                idx.append(i)
+                heads.append(header[i])
+        is_date = []
+        for i in idx:
+            t = (f_cells[i].get('effectiveFormat', {}).get('numberFormat', {}).get('type', '')
+                 if i < len(f_cells) else '')
+            is_date.append(t in ('DATE', 'DATE_TIME'))
+        cols = []
+        if idx:
+            rng = [f"{q}!{_sa_col_letter(i)}:{_sa_col_letter(i)}" for i in idx]
+            vr = sess.get(base + '/values:batchGet',
+                          params=[('ranges', r_) for r_ in rng] + [('majorDimension', 'COLUMNS'),
+                                  ('valueRenderOption', 'UNFORMATTED_VALUE'),
+                                  ('dateTimeRenderOption', 'SERIAL_NUMBER')],
+                          timeout=timeout)
+            if vr.status_code != 200:
+                raise RuntimeError(f"Sheets API {vr.status_code}: {vr.text[:200]}")
+            for vrng in vr.json()['valueRanges']:
+                v = vrng.get('values', [[]])
+                cols.append(v[0][1:] if v else [])   # drop the header row
+        n = max((len(c) for c in cols), default=0)
+        out_cols = []
+        for c, d in zip(cols, is_date):
+            out_cols.append([_sa_cell(x, d) for x in c] + [''] * (n - len(c)))
+        rows = [list(r_) for r_ in zip(*out_cols)] if out_cols else []
+        for r_ in rows:
+            for j, x in enumerate(r_):
+                if x is None:
+                    r_[j] = ''
+        res = {'headers': heads, 'rows': rows, 'total': n}
+        print(f"  [Sheets API] {tab_name or tab} ({file_id[:6]}…): {n:,} rows x {len(heads)} cols, "
+              f"{sum(is_date)} date col(s), {time.monotonic() - t0:.1f}s", flush=True)
+        _SA_CACHE[key] = res
+        return res
+
+
+def _sheets_api_get(action, extra, timeout):
+    extra = dict(extra or {})
+    if action == 'getCurrentRetails':
+        fid, tab, cols = RETAILS_FILE_ID, RETAILS_TAB, ''
+    elif action == 'getSheetData':
+        fid, tab, cols = extra['fileId'], extra.get('tabName'), extra.get('cols', '')
+    else:
+        return {'error': 'unknown action: ' + action}
+    d = _sa_load(fid, tab, cols, max(timeout, 300))
+    page, size = int(extra.get('page', 0) or 0), int(extra.get('pageSize', 3000) or 3000)
+    st = page * size
+    return {'headers': d['headers'], 'rows': d['rows'][st:st + size],
+            'done': st + size >= d['total'], 'total': d['total']}
+
+
 def proxy_get(action, extra_params=None, timeout=120):
     global _as_calls_total
+    if _SA_INFO:
+        return _sheets_api_get(action, extra_params, timeout)
     with _as_calls_lock:
         _as_calls_total += 1
     params = {'action': action, 'secret': SECRET}
@@ -4172,7 +4311,7 @@ print(f"\nPOSTing to Apps Script… ({len(_envelope) // 1024:,} KB compressed, "
 del _raw_bytes, _compressed, json_str
 
 body = None
-for _attempt in range(3):
+for _attempt in range(0 if _SA_INFO else 3):
     try:
         _resp = requests.post(
             APPS_SCRIPT_URL,
@@ -4192,6 +4331,8 @@ for _attempt in range(3):
         else:
             traceback.print_exc()
             _fail_exit('Firebase POST (all 3 attempts exhausted)', str(_e), _staging_path)
+if _SA_INFO:
+    body = '{"ok": true, "note": "Sheets API mode - no Apps Script POST"}'
 print(f"Response: {body[:500]}{'…' if body and len(body) > 500 else ''}", flush=True)
 
 # ── Validate Apps Script response ─────────────────────────────────────────────
