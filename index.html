@@ -4940,6 +4940,35 @@ function App() {
 
   useEffect(() => { if (auth && (auth.role === 'full' || auth.role === 'viewer' || auth.role === 'admin')) doFetch(); }, [auth && auth.role]);
 
+  // ── Rebuild on demand: starts the data pipeline, waits for it, then reloads ──
+  const [rebuild, setRebuild] = useState('');
+  const doRebuild = useCallback(async () => {
+    if (rebuild) return;
+    setRebuild('Starting rebuild…');
+    try {
+      const r = await fetch('/api/refresh', { method: 'POST' });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'failed');
+      setRebuild(j.started ? 'Rebuilding data (about 8 min)…' : 'A rebuild is already running…');
+      const t0 = Date.now();
+      let seenRunning = false;
+      for (;;) {
+        await new Promise(res => setTimeout(res, 20000));
+        let st = null;
+        try { st = await (await fetch('/api/refresh?status=1', { cache: 'no-store' })).json(); } catch (e) {}
+        if (st && st.running) seenRunning = true;
+        if ((st && !st.running && (seenRunning || Date.now() - t0 > 60000)) || Date.now() - t0 > 25 * 60000) break;
+      }
+      setRebuild('Publishing…');
+      await new Promise(res => setTimeout(res, 75000));   // let Vercel redeploy the new data
+      await doFetch();
+      setRebuild('');
+    } catch (e) {
+      setRebuild('Rebuild failed: ' + e.message);
+      setTimeout(() => setRebuild(''), 8000);
+    }
+  }, [rebuild, doFetch]);
+
   // ── Derived data ───────────────────────────────────────────────────
   const effectiveData = useMemo(() => {
     if (!data) return null;
@@ -5171,6 +5200,7 @@ function App() {
             ),
             loading && ce('div', { className:'spinner' }),
             ce('button', { className:'btn btn-secondary', style:{fontSize:11}, onClick:doFetch, title:'Reload the latest data (rebuilt at 10:30, 14:00, 18:00 and 00:00 IST)' }, '⟳ Refresh'),
+            ce('button', { className:'btn btn-secondary', style:{fontSize:11}, onClick:doRebuild, disabled:!!rebuild, title:'Rebuild the data from Google Sheets now (takes about 8 minutes), then reload' }, rebuild || '⟳ Rebuild now'),
             role === 'admin' && ce('button', { className:'btn btn-secondary', style:{fontSize:11}, onClick:() => setAdminView(true) }, '⚙ Admin Panel'),
             userChip,
             ce('button', { className:'btn-ghost', style:{fontSize:11,color:'#64748B'}, onClick:handleLogout }, 'Sign Out'),
