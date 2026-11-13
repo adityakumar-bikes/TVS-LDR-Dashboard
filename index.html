@@ -5075,7 +5075,7 @@ function App() {
   const viewerMode = role === 'viewer';
   const visibleTabs = viewerMode
     ? TABS.filter(t => ['modelxsrc','modelperf','statexmodel','geodealer','pivot'].includes(t.id))
-    : TABS.filter(t => (t.id !== 'daily' && t.id !== 'tat') || role === 'admin');   // Day on Day and Lead → Retail TAT: admins only
+    : TABS.filter(t => t.id !== 'tat' || role === 'admin');   // Lead → Retail TAT: admins only (Day on Day: admin + full)
 
   // Tabs fed by the resolved universe (exact Purch. Model / City retails, see buildResolved).
   const CITY_TABS = ['overview','source','ltxsrc','modelxsrc','modelperf','statexmodel'];
