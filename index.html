@@ -5199,7 +5199,6 @@ function App() {
               }, 'A+'),
             ),
             loading && ce('div', { className:'spinner' }),
-            ce('button', { className:'btn btn-secondary', style:{fontSize:11}, onClick:doFetch, title:'Reload the latest data (rebuilt at 10:30, 14:00, 18:00 and 00:00 IST)' }, '⟳ Refresh'),
             ce('button', { className:'btn btn-secondary', style:{fontSize:11}, onClick:doRebuild, disabled:!!rebuild, title:'Rebuild the data from Google Sheets now (takes about 8 minutes), then reload' }, rebuild || '⟳ Rebuild now'),
             role === 'admin' && ce('button', { className:'btn btn-secondary', style:{fontSize:11}, onClick:() => setAdminView(true) }, '⚙ Admin Panel'),
             userChip,
