@@ -3940,6 +3940,23 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
   useEffect(() => { if (opts.length && !opts.includes(sel)) setSel(opts[0]); }, [opts]);
   const idx = opts.indexOf(sel);
 
+  // Optional date range (overrides the single month): either end may be left empty (then it is a single day).
+  const [rangeFrom, setRangeFrom] = useState('');
+  const [rangeTo, setRangeTo] = useState('');
+  const rg = useMemo(() => { const f = rangeFrom || rangeTo, t = rangeTo || rangeFrom; if (!f) return null; return f <= t ? [f, t] : [t, f]; }, [rangeFrom, rangeTo]);
+  const rgInt = rg ? [+rg[0].replace(/-/g, ''), +rg[1].replace(/-/g, '')] : null;
+  const inPeriod = d => d >= rgInt[0] && d <= rgInt[1];
+  const periodTxt = rg ? (rg[0] === rg[1] ? rg[0] : rg[0] + ' to ' + rg[1]) : sel;
+  const dayLbl = x => (rg ? x.d + ' ' + MONTHS[x.mo - 1] + (rg[0].slice(0, 4) !== rg[1].slice(0, 4) ? ' ' + String(x.yr).slice(2) : '') : String(x.d));
+  const pickMonth = m => { setRangeFrom(''); setRangeTo(''); setSel(m); };
+  const bounds = useMemo(() => {
+    let lo = null, hi = null;
+    opts.forEach(m => { const x = /([A-Za-z]+)'(\d+)/.exec(m); if (!x) return; const a = (2000 + +x[2]) * 100 + MONTHS.indexOf(x[1]) + 1; if (lo === null || a < lo) lo = a; if (hi === null || a > hi) hi = a; });
+    if (lo === null) return ['', ''];
+    const e = new Date(Math.floor(hi / 100), hi % 100, 0).getDate();
+    return [Math.floor(lo / 100) + '-' + String(lo % 100).padStart(2, '0') + '-01', Math.floor(hi / 100) + '-' + String(hi % 100).padStart(2, '0') + '-' + String(e).padStart(2, '0')];
+  }, [opts]);
+
   // Full-granularity daily detail (city / purchased model) for the latest 4 months, loaded on demand (admin tab only).
   const [daily, setDaily] = useState(null);
   useEffect(() => {
@@ -4013,6 +4030,39 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
       return { L, Rd, Rc, uL, uRd, uRc, exact: false };
     };
 
+    if (rg) {
+      const sD = RT !== 'co', sC = RT !== 'dms';
+      const days0 = []; let exactAll = true;
+      let y = +rg[0].slice(0, 4), m = +rg[0].slice(5, 7);
+      const ey = +rg[1].slice(0, 4), em = +rg[1].slice(5, 7);
+      while (y * 100 + m <= ey * 100 + em) {
+        if (opts.includes(MONTHS[m - 1] + "'" + String(y).slice(2))) {
+          const sdim = new Date(y, m, 0).getDate();
+          const c = calc(y * 100 + m, sdim);
+          if (c) {
+            if (!c.exact) exactAll = false;
+            for (let i = 0; i < sdim; i++) {
+              const iso = y + '-' + String(m).padStart(2, '0') + '-' + String(i + 1).padStart(2, '0');
+              if (iso < rg[0] || iso > rg[1]) continue;
+              const rd0 = sD ? c.Rd[i] : 0, rc0 = sC ? c.Rc[i] : 0;
+              days0.push({ d: i + 1, yr: y, mo: m, wd: WD[new Date(y, m - 1, i + 1).getDay()], l: c.L[i], rd: rd0, rc: rc0, r: rd0 + rc0,
+                           l2r: c.L[i] > 0 ? (rd0 + rc0) / c.L[i] * 100 : 0 });
+            }
+          }
+        }
+        m++; if (m > 12) { m = 1; y++; }
+      }
+      if (!days0.length) return null;
+      let lastI = -1, lastLI = -1;
+      days0.forEach((x, i) => { if (x.l > 0 || x.rd > 0 || x.rc > 0) lastI = i; if (x.l > 0) lastLI = i; });
+      const sh = days0.slice(0, lastI + 1);
+      const gL = sh.reduce((a, x) => a + x.l, 0), gRd = sh.reduce((a, x) => a + x.rd, 0), gRc = sh.reduce((a, x) => a + x.rc, 0);
+      return { year: +rg[0].slice(0, 4), mon: +rg[0].slice(5, 7), dim: days0.length, days: days0, shown: sh, last: sh.length,
+               uL: 0, uR: 0, nRd: 0, nRc: 0, dL: gL, dR: gRd + gRc, tL: gL, tR: gRd + gRc, tRd: gRd, tRc: gRc,
+               peak: sh.length ? sh.reduce((b, x) => (x.l > b.l ? x : b), sh[0]) : null,
+               avgL: lastLI >= 0 ? gL / (lastLI + 1) : 0, l2r: gL > 0 ? (gRd + gRc) / gL * 100 : 0, exact: exactAll, cmp: null, range: true };
+    }
+
     const cur = calc(ym, dim);
     if (!cur) return null;
     const { L, Rd, Rc, uL, uRd, uRc } = cur;
@@ -4057,7 +4107,7 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
     }
     return { year, mon, dim, days, shown, last, uL, uR, nRd, nRc, dL, dR: dRd + dRc, tL, tR, tRd, tRc, peak,
              avgL: lastL ? dL / lastL : 0, l2r: tL > 0 ? tR / tL * 100 : 0, exact: cur.exact, cmp };
-  }, [dd, ddu, sel, filters, RT, maps, upd, hasSt, dx]);
+  }, [dd, ddu, sel, filters, RT, maps, upd, hasSt, dx, rg, opts]);
 
   useEffect(() => {
     const canvas = chartRef.current;
@@ -4067,7 +4117,7 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
     chartInst.current = new Chart(canvas, {
       type: 'bar',
       data: {
-        labels: D.map(x => String(x.d)),
+        labels: D.map(x => dayLbl(x)),
         datasets: [
           { label: 'Leads', data: D.map(x => x.l), backgroundColor: '#0030872a', borderColor: '#003087', borderWidth: 1.5, borderRadius: 3, stack: 'leads', yAxisID: 'y' },
           { label: 'Retail — DMS', data: D.map(x => x.rd), backgroundColor: '#E3183780', borderColor: '#E31837', borderWidth: 1.5, borderRadius: 3, stack: 'retail', yAxisID: 'y' },
@@ -4083,13 +4133,13 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
           tooltip: {
             backgroundColor: 'rgba(11,22,41,.92)', titleColor: '#DBEAFE', bodyColor: '#93C5FD', footerColor: '#FDE68A', padding: 10, cornerRadius: 8,
             callbacks: {
-              title: items => { const x = D[items[0].dataIndex]; return x.d + ' ' + MONTHS[view.mon - 1] + ' ' + view.year + ' (' + x.wd + ')'; },
+              title: items => { const x = D[items[0].dataIndex]; return x.d + ' ' + MONTHS[(x.mo || view.mon) - 1] + ' ' + (x.yr || view.year) + ' (' + x.wd + ')'; },
               footer: items => { const x = D[items[0].dataIndex]; return 'Total retail: ' + Nf(x.r); },
             }
           },
         },
         scales: {
-          x: { stacked: true, grid: { color: 'rgba(100,116,139,.1)' }, ticks: { color: '#475569', font: { size: 10 } }, title: { display: true, text: 'Day of month', color: '#94a3b8', font: { size: 9 } } },
+          x: { stacked: true, grid: { color: 'rgba(100,116,139,.1)' }, ticks: { color: '#475569', font: { size: 10 } }, title: { display: true, text: rg ? 'Date' : 'Day of month', color: '#94a3b8', font: { size: 9 } } },
           y: { stacked: true, grid: { color: 'rgba(100,116,139,.1)' }, ticks: { color: '#475569', font: { size: 10 } }, position: 'left', beginAtZero: true, title: { display: true, text: 'Volume', color: '#94a3b8', font: { size: 9 } } },
           y2: { stacked: false, position: 'right', ticks: { color: '#F5A623', font: { size: 10 }, callback: v => v + '%' }, grid: { display: false }, title: { display: true, text: 'L2R%', color: '#F5A623', font: { size: 9 } }, beginAtZero: true },
         }
@@ -4111,19 +4161,19 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
     const dayTxt = d => (d % 100 === 0 ? noDayLabel : (d % 100) + ' ' + MONTHS[Math.floor(d / 100) % 100 - 1] + ' ' + Math.floor(d / 10000));
     const pct = (l, rr) => (l > 0 ? +(rr / l * 100).toFixed(2) : '');
     const aoa = [['Date', 'Day', 'Leads (created)', 'Retail DMS', 'Retail VOC (Call Out)', 'Total Retail', 'L2R%']];
-    for (const x of view.shown) aoa.push([x.d + ' ' + MONTHS[view.mon - 1] + ' ' + view.year, x.wd, x.l, x.rd, x.rc, x.r, +x.l2r.toFixed(2)]);
+    for (const x of view.shown) aoa.push([x.d + ' ' + MONTHS[(x.mo || view.mon) - 1] + ' ' + (x.yr || view.year), x.wd, x.l, x.rd, x.rc, x.r, +x.l2r.toFixed(2)]);
     if (view.uL > 0 || view.uR > 0) aoa.push([noDayLabel, '', view.uL, view.nRd, view.nRc, view.uR, '']);
     aoa.push(['\u2211 Total', '', view.tL, view.tRd, view.tRc, view.tR, +view.l2r.toFixed(2)]);
-    const base = 'Day on Day ' + sel + (upd ? ' OU' : ' OC');
-    const fname = 'TVS_DayOnDay_' + sel.replace("'", '') + (upd ? '_OnUpdate' : '_OnCreate');
+    const base = (rg ? 'Day on Day range' : 'Day on Day ' + sel) + (upd ? ' OU' : ' OC');
+    const fname = 'TVS_DayOnDay_' + (rg ? rg[0] + '_to_' + rg[1] : sel.replace("'", '')) + (upd ? '_OnUpdate' : '_OnCreate');
     const ym = view.year * 100 + view.mon;
-    if (!(dx && dx.months.includes(ym))) { exportXlsx({ [base]: aoa }, fname); return; }
+    if (!(dx && (rg ? view.exact : dx.months.includes(ym)))) { exportXlsx({ [base]: aoa }, fname); return; }
 
     // Full detail for the filtered selection (same filters and rules as the tab).
     const P = dailyPreds(dx, filters, maps);
     const setTxt = (s, all) => (s && s.size ? [...s].join(', ') : all);
     const fl = [['TVS Day on Day export'], [],
-      ['Month', sel], ['Basis', upd ? 'On Update (leads on creation day; retails on retail/attribution day)' : 'On Create (retails on the creation day of the lead)'],
+      [rg ? 'Date range' : 'Month', periodTxt], ['Basis', upd ? 'On Update (leads on creation day; retails on retail/attribution day)' : 'On Create (retails on the creation day of the lead)'],
       ['Retail type shown', RT === 'dms' ? 'DMS only' : RT === 'co' ? 'Call Out (VOC) only' : 'DMS + Call Out (VOC)'],
       ['Lead Type', setTxt(filters.leadTypes, 'All')], ['Source', setTxt(filters.sources, 'All')], ['Model', setTxt(filters.models, 'All')],
       ['State', setTxt(filters.states, 'All')], ['City', setTxt(filters.cities, 'All')],
@@ -4138,7 +4188,7 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
     const acc = { mdl: new Map(), src: new Map(), lt: new Map(), st: new Map(), city: new Map(), pm: new Map() };
     const bump = (m, k, i, v) => { let e = m.get(k); if (!e) { e = [0, 0, 0]; m.set(k, e); } e[i] += v; };
     for (let i = 0; i < A.n.length; i++) {
-      if (Math.floor(A.d[i] / 100) !== ym) continue;
+      if (rg ? !inPeriod(A.d[i]) : Math.floor(A.d[i] / 100) !== ym) continue;
       if (!(P.okM[A.mi[i]] && P.okS[A.si[i]] && P.okT[A.lt[i]] && P.okSt[A.st[i]] && P.okC[A.ci[i]])) continue;
       leadRows.push([dayTxt(A.d[i]), M.mdl[A.mi[i]], M.src[A.si[i]], M.lt[A.lt[i]], M.st[A.st[i]], CN[A.ci[i]], A.n[i]]);
       bump(acc.mdl, M.mdl[A.mi[i]], 0, A.n[i]); bump(acc.src, M.src[A.si[i]], 0, A.n[i]); bump(acc.lt, M.lt[A.lt[i]], 0, A.n[i]);
@@ -4146,7 +4196,7 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
     }
     const retRows = [['Lead creation date', 'Retail date', 'Model (enquired)', 'Source', 'Lead Type', 'State', 'City', 'Purchased Model', 'Retail type', 'Retails']];
     for (let i = 0; i < B.n.length; i++) {
-      if (Math.floor(K[i] / 100) !== ym || B.rt[i] === 2) continue;
+      if ((rg ? !inPeriod(K[i]) : Math.floor(K[i] / 100) !== ym) || B.rt[i] === 2) continue;
       if (B.rt[i] === 0 ? !showD : !showC) continue;
       if (!((P.pmSel || P.okM[B.mi[i]]) && P.okS[B.si[i]] && P.okT[B.lt[i]] && P.okSt[B.st[i]] && P.okC[B.ci[i]])) continue;
       if (P.pmSel && !P.pmSel.has(B.pm[i])) continue;
@@ -4182,11 +4232,18 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
 
   const navCard = (withExport) => ce('div', { className: 'card', style: { padding: '12px 18px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
       ce('div', { className: 'fs-10', style: { fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '.06em' } }, 'Month'),
-      navBtn('◀', idx >= opts.length - 1, () => setSel(opts[idx + 1])),
-      ce('select', { value: sel, onChange: e => setSel(e.target.value),
+      navBtn('◀', idx >= opts.length - 1, () => pickMonth(opts[idx + 1])),
+      ce('select', { value: sel, onChange: e => pickMonth(e.target.value),
         style: { fontSize: 13, fontWeight: 700, padding: '5px 10px', borderRadius: 8, border: '1px solid #CBD5E1', background: '#fff', color: '#0f172a', fontFamily: 'inherit' } },
         opts.map(m => ce('option', { key: m, value: m }, m))),
-      navBtn('▶', idx <= 0, () => setSel(opts[idx - 1])),
+      navBtn('▶', idx <= 0, () => pickMonth(opts[idx - 1])),
+      ce('div', { className: 'fs-10', style: { fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '.06em', marginLeft: 14 } }, 'Date range'),
+      ce('input', { type: 'date', value: rangeFrom, min: bounds[0], max: bounds[1], onChange: e => setRangeFrom(e.target.value),
+        style: { fontSize: 12, padding: '4px 8px', borderRadius: 8, border: '1px solid ' + (rg ? '#E31837' : '#CBD5E1'), background: '#fff', color: '#0f172a', fontFamily: 'inherit' } }),
+      ce('span', { style: { color: '#94A3B8', fontSize: 12 } }, 'to'),
+      ce('input', { type: 'date', value: rangeTo, min: bounds[0], max: bounds[1], onChange: e => setRangeTo(e.target.value),
+        style: { fontSize: 12, padding: '4px 8px', borderRadius: 8, border: '1px solid ' + (rg ? '#E31837' : '#CBD5E1'), background: '#fff', color: '#0f172a', fontFamily: 'inherit' } }),
+      rg && ce('button', { className: 'btn btn-secondary', onClick: () => { setRangeFrom(''); setRangeTo(''); }, style: { fontSize: 12, padding: '4px 12px' } }, 'Clear range'),
       ce('div', { style: { marginLeft: 'auto' } }, withExport ? ce(ExportBtn, { onClick: exportData }) : null)
     );
 
@@ -4218,11 +4275,11 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
   if (view.last === 0) return msgCard('🔎', 'No leads for this selection in ' + sel, 'Try widening the Model, Source or Lead Type filters.');
 
   const KPIs = [
-    { label: 'Leads (month to date)', value: Nf(view.tL), sub: view.last + ' day' + (view.last === 1 ? '' : 's') + ' of data', color: '#003087', dl: view.cmp && fmtDelta(view.cmp.leads, '%') },
+    { label: rg ? 'Leads (selected range)' : 'Leads (month to date)', value: Nf(view.tL), sub: view.last + ' day' + (view.last === 1 ? '' : 's') + ' of data', color: '#003087', dl: view.cmp && fmtDelta(view.cmp.leads, '%') },
     { label: upd ? 'Retails (by retail date)' : 'Retails (of leads created)', value: Nf(view.tR), sub: 'DMS ' + Nf(view.tRd) + ' · VOC ' + Nf(view.tRc), color: '#E31837', dl: view.cmp && fmtDelta(view.cmp.retails, '%') },
     { label: 'L2R %', value: view.l2r.toFixed(1) + '%', sub: 'Retails ÷ Leads', color: '#F5A623', dl: view.cmp && fmtDelta(view.cmp.l2r, ' pp') },
     { label: 'Avg leads / day', value: Nf(Math.round(view.avgL)), sub: 'over days with data', color: '#7C3AED', dl: view.cmp && fmtDelta(view.cmp.avg, '%') },
-    { label: 'Peak day', value: view.peak ? Nf(view.peak.l) : '—', sub: view.peak ? view.peak.d + ' ' + MONTHS[view.mon - 1] + ' (' + view.peak.wd + ')' : '', color: '#059669', dl: view.cmp && fmtDelta(view.cmp.peak, '%') },
+    { label: 'Peak day', value: view.peak ? Nf(view.peak.l) : '—', sub: view.peak ? view.peak.d + ' ' + MONTHS[(view.peak.mo || view.mon) - 1] + ' (' + view.peak.wd + ')' : '', color: '#059669', dl: view.cmp && fmtDelta(view.cmp.peak, '%') },
   ];
 
   return ce('div', { className: 'fade-up' },
@@ -4239,11 +4296,11 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
       ))
     ),
     ce('div', { className: 'card', style: { padding: '16px 18px', marginBottom: 14 } },
-      ce('div', { className: 'section-title' }, 'Day-on-Day — ' + sel + ': Leads, Retails (DMS / VOC) & L2R%' + (upd ? ' · On Update' : ' · On Create')),
+      ce('div', { className: 'section-title' }, 'Day-on-Day — ' + periodTxt + ': Leads, Retails (DMS / VOC) & L2R%' + (upd ? ' · On Update' : ' · On Create')),
       ce('div', { style: { height: 300, position: 'relative' } }, ce('canvas', { ref: chartRef }))
     ),
     ce('div', { className: 'card', style: { padding: '16px 18px', marginBottom: 14 } },
-      ce('div', { className: 'section-title' }, 'Daily detail — ' + sel),
+      ce('div', { className: 'section-title' }, 'Daily detail — ' + periodTxt),
       ce('div', { className: 'scroll-x' },
         ce('table', null,
           ce('thead', null, ce('tr', null,
@@ -4254,8 +4311,8 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
             ce('th', null, 'Total Retail'),
             ce('th', null, 'L2R%'))),
           ce('tbody', null,
-            ...view.shown.map(x => ce('tr', { key: x.d },
-              ce('td', { className: 'label' }, x.d + ' ' + MONTHS[view.mon - 1] + ', ' + x.wd),
+            ...view.shown.map(x => ce('tr', { key: (x.yr || 0) + '-' + (x.mo || 0) + '-' + x.d },
+              ce('td', { className: 'label' }, x.d + ' ' + MONTHS[(x.mo || view.mon) - 1] + (rg ? ' ' + x.yr : '') + ', ' + x.wd),
               ce('td', null, Nf(x.l)),
               ce('td', { style: { color: '#E31837', fontWeight: 700 } }, Nf(x.rd)),
               ce('td', { style: { color: '#7C3AED', fontWeight: 700 } }, Nf(x.rc)),
