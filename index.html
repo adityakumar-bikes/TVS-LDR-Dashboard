@@ -5084,10 +5084,10 @@ function App() {
     if (!effectiveData) return null;
     const cv = resolved && CITY_TABS.includes(tab) ? resolved : null;
     const props = { data: cv ? cv.data : effectiveData, filters: cv ? cv.filters : filters, months, RT, viewerMode, leadsMode, pmMaps: cv ? null : pmMaps,
-      onFiltersChange: f => startT(() => setFilters(f)), setRT, userKey: auth ? auth.email : '' };
+      onFiltersChange: f => startT(() => setFilters(f)), setRT, userKey: auth ? auth.email : '', role };
     switch (tab) {
       case 'overview':    return ce(OverviewTab,      props);
-      case 'daily':       return role === 'admin' ? ce(DailyTab, props) : ce(OverviewTab, props);
+      case 'daily':       return (role === 'admin' || role === 'full') ? ce(DailyTab, props) : ce(OverviewTab, props);
       case 'source':      return ce(SourceTab,         props);
       case 'ltxsrc':      return ce(LTSourceTab,       props);
       case 'modelxsrc':   return ce(ModelSourceTab,    props);
@@ -5830,7 +5830,7 @@ function storePivotTpls(email, list) {
   catch (e) { return false; }
 }
 
-const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leadsMode, pmMaps, onFiltersChange, setRT, userKey }) {
+const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leadsMode, pmMaps, onFiltersChange, setRT, userKey, role }) {
   const { maps } = data;
 
   const [rowDims,    setRowDims]    = useState(['mdl']);
@@ -5853,6 +5853,8 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
   const [dFrom,      setDFrom]      = useState('');     // Date filter (YYYY-MM-DD), applies at lead-creation-day level
   const [dTo,        setDTo]        = useState('');
   const [topN,       setTopN]       = useState(20);
+  const [expMenu,    setExpMenu]    = useState(false);
+  const [expBusy,    setExpBusy]    = useState(false);
   const [collapsed,  setCollapsed]  = useState(new Set());
   const [addRowOpen, setAddRowOpen] = useState(false);
   const [addColOpen, setAddColOpen] = useState(false);
@@ -6532,7 +6534,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     setSortBy('__total__');
   }
 
-  function handleExport() {
+  function handleExport(withDetail) {
     if (!pivotResult || sortedRows.length === 0) return;
     const hasR2  = rowDims.length > 1;
     const hasC2  = colDims.length > 1;
@@ -6584,7 +6586,118 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       gtRow.push(t);
     }
     aoa.push(gtRow);
+    if (withDetail === true) { exportPivotWithDetail(aoa); return; }
     exportXlsx({ ['Pivot']: aoa }, `TVS_Pivot_${Date.now()}`);
+  }
+
+  // Admin: pivot + filters + summary tables + lead-level detail (aggregated rows from the daily detail file; no enquiry ids exist in the dashboard data).
+  async function exportPivotWithDetail(pivotAoa) {
+    setExpBusy(true);
+    try {
+      const dx0 = await loadDailyDetail();
+      if (!dx0 || dx0.t !== data.t) { alert('Lead-level detail is not available for this data build yet. Try again after the next rebuild.'); return; }
+      const dx = { ...dx0, cityName: dx0.maps.city.map(c => canonicalCity(c)) };
+      const upd = leadsMode === 'update';
+      const M0 = dx.maps;
+      const showD = RT !== 'co', showC = RT !== 'dms';
+      const ymSet = new Set();
+      for (const lbl of months) {
+        const m = String(lbl).match(/([A-Za-z]+)'(\d+)/); if (!m) continue;
+        const mo = MONTHS.indexOf(m[1].slice(0, 3)) + 1; if (mo > 0) ymSet.add((2000 + +m[2]) * 100 + mo);
+      }
+      const okYm = new Set([...ymSet].filter(v => dx.months.includes(v)));
+      if (!okYm.size) { alert('Lead-level detail is only available for the latest months in the daily detail file. None of the selected months are in it.'); return; }
+      const fromN = dFrom ? +dFrom.replace(/-/g, '') : 0, toN = dTo ? +dTo.replace(/-/g, '') : 99999999;
+      const inDate = d => d >= fromN && d <= toN;
+      const P = dailyPreds(dx, filters, maps);
+      // Context: only what the pivot on screen shows (its row/column values after Top N), per pivot dimension.
+      const mlbl = d => MONTHS[Math.floor(d / 100) % 100 - 1] + "'" + String(Math.floor(d / 10000) % 100).padStart(2, '0');
+      const dlbl = d => (d % 100 === 0 ? 'No day \u00B7 ' + mlbl(d) : Math.floor(d / 10000) + '-' + String(Math.floor(d / 100) % 100).padStart(2, '0') + '-' + String(d % 100).padStart(2, '0'));
+      const shownBy = {};   // dim -> Set of labels displayed
+      const addShown = (dim, lbl) => { (shownBy[dim] = shownBy[dim] || new Set()).add(lbl); };
+      for (const { label, entry } of sortedRows) {
+        addShown(rowDims[0], String(label));
+        if (rowDims[1]) for (const k of entry.children.keys()) addShown(rowDims[1], String(k));
+      }
+      for (const ck of orderedCols) {
+        if (colDims.length > 1) { const i = ck.indexOf(COL_SEP); addShown(colDims[0], ck.slice(0, i)); addShown(colDims[1], ck.slice(i + 1)); }
+        else addShown(colDims[0], String(ck));
+      }
+      const known = { mdl: new Set(M0.mdl), pmd: new Set(M0.mdl), src: new Set(M0.src), lt: new Set(M0.lt), st: new Set(M0.st), city: new Set(dx.cityName) };
+      const notes = [];
+      const restr = {};   // dim -> Set to enforce
+      for (const dim of Object.keys(shownBy)) {
+        if (dim === 'dl') { notes.push('Dealer is not in the detail data: not applied'); continue; }
+        if (dim === 'lm' || dim === 'day') { restr[dim] = shownBy[dim]; continue; }
+        if (known[dim] && [...shownBy[dim]].some(l => known[dim].has(l))) restr[dim] = shownBy[dim];
+        else notes.push((DIMS.find(d => d.key === dim)?.label || dim) + ' values could not be matched to the detail data: not applied');
+      }
+      const dimsInPivot = [...new Set([...rowDims, ...colDims])];
+      const okL = (d, mi, si, lt, st, ci) =>
+        (!restr.lm || restr.lm.has(mlbl(d))) && (!restr.day || restr.day.has(dlbl(d))) && (!restr.mdl || restr.mdl.has(M0.mdl[mi])) &&
+        (!restr.src || restr.src.has(M0.src[si])) && (!restr.lt || restr.lt.has(M0.lt[lt])) && (!restr.st || restr.st.has(M0.st[st])) &&
+        (!restr.city || restr.city.has(dx.cityName[ci]));
+      const okR = (k, mi, si, lt, st, ci, pm) => okL(k, mi, si, lt, st, ci) && (!restr.pmd || restr.pmd.has(M0.mdl[pm]));
+      const dayTxt = d => (d % 100 === 0 ? 'No day recorded' : (d % 100) + ' ' + MONTHS[Math.floor(d / 100) % 100 - 1] + ' ' + Math.floor(d / 10000));
+      const pct = (l, rr) => (l > 0 ? +(rr / l * 100).toFixed(2) : '');
+      const A = dx.L, B = dx.R, K = upd ? B.ud : B.cd, M = dx.maps, CN = dx.cityName;
+      const leadRows = [['Lead creation date', 'Model', 'Source', 'Lead Type', 'State', 'City', 'Leads']];
+      const retRows = [['Lead creation date', 'Retail date', 'Model (enquired)', 'Source', 'Lead Type', 'State', 'City', 'Purchased Model', 'Retail type', 'Retails']];
+      const acc = { mdl: new Map(), src: new Map(), lt: new Map(), st: new Map(), city: new Map(), pm: new Map() };
+      const bump = (m, k, i, v) => { let e = m.get(k); if (!e) { e = [0, 0, 0]; m.set(k, e); } e[i] += v; };
+      let tL = 0, tD = 0, tC = 0;
+      for (let i = 0; i < A.n.length; i++) {
+        if (!okYm.has(Math.floor(A.d[i] / 100)) || !inDate(A.d[i])) continue;
+        if (!(P.okM[A.mi[i]] && P.okS[A.si[i]] && P.okT[A.lt[i]] && P.okSt[A.st[i]] && P.okC[A.ci[i]])) continue;
+        if (!okL(A.d[i], A.mi[i], A.si[i], A.lt[i], A.st[i], A.ci[i])) continue;
+        leadRows.push([dayTxt(A.d[i]), M.mdl[A.mi[i]], M.src[A.si[i]], M.lt[A.lt[i]], M.st[A.st[i]], CN[A.ci[i]], A.n[i]]);
+        tL += A.n[i];
+        bump(acc.mdl, M.mdl[A.mi[i]], 0, A.n[i]); bump(acc.src, M.src[A.si[i]], 0, A.n[i]); bump(acc.lt, M.lt[A.lt[i]], 0, A.n[i]);
+        bump(acc.st, M.st[A.st[i]], 0, A.n[i]); bump(acc.city, CN[A.ci[i]], 0, A.n[i]);
+      }
+      for (let i = 0; i < B.n.length; i++) {
+        if (B.rt[i] === 2 || !okYm.has(Math.floor(K[i] / 100)) || !inDate(B.cd[i])) continue;
+        if (B.rt[i] === 0 ? !showD : !showC) continue;
+        if (!((P.pmSel || P.okM[B.mi[i]]) && P.okS[B.si[i]] && P.okT[B.lt[i]] && P.okSt[B.st[i]] && P.okC[B.ci[i]])) continue;
+        if (P.pmSel && !P.pmSel.has(B.pm[i])) continue;
+        if (!okR(K[i], B.mi[i], B.si[i], B.lt[i], B.st[i], B.ci[i], B.pm[i])) continue;
+        const slot = B.rt[i] === 0 ? 1 : 2;
+        retRows.push([dayTxt(B.cd[i]), dayTxt(B.ud[i]), M.mdl[B.mi[i]], M.src[B.si[i]], M.lt[B.lt[i]], M.st[B.st[i]], CN[B.ci[i]], M.mdl[B.pm[i]], slot === 1 ? 'DMS' : 'Call Out (VOC)', B.n[i]]);
+        if (slot === 1) tD += B.n[i]; else tC += B.n[i];
+        bump(acc.mdl, M.mdl[B.mi[i]], slot, B.n[i]); bump(acc.src, M.src[B.si[i]], slot, B.n[i]); bump(acc.lt, M.lt[B.lt[i]], slot, B.n[i]);
+        bump(acc.st, M.st[B.st[i]], slot, B.n[i]); bump(acc.city, CN[B.ci[i]], slot, B.n[i]); bump(acc.pm, M.mdl[B.pm[i]], slot, B.n[i]);
+      }
+      const byDim = (title, m, withLeads) => {
+        const rows = [...m.entries()].sort((x, y) => (y[1][0] + y[1][1] + y[1][2]) - (x[1][0] + x[1][1] + x[1][2]));
+        const out = [withLeads ? [title, 'Leads', 'Retail DMS', 'Retail VOC (Call Out)', 'Total Retail', 'L2R%'] : [title, 'Retail DMS', 'Retail VOC (Call Out)', 'Total Retail']];
+        let tl = 0, td = 0, tc = 0;
+        for (const [k, v] of rows) { tl += v[0]; td += v[1]; tc += v[2]; out.push(withLeads ? [k, v[0], v[1], v[2], v[1] + v[2], pct(v[0], v[1] + v[2])] : [k, v[1], v[2], v[1] + v[2]]); }
+        out.push(withLeads ? ['\u2211 Total', tl, td, tc, td + tc, pct(tl, td + tc)] : ['\u2211 Total', td, tc, td + tc]);
+        return out;
+      };
+      const setTxt = (st, all) => (st && st.size ? [...st].join(', ') : all);
+      const fl = [['TVS Pivot export (admin) \u2013 with summary and lead-level detail'], [],
+        ['Months', [...okYm].sort().map(v => MONTHS[v % 100 - 1] + "'" + String(Math.floor(v / 100) % 100).padStart(2, '0')).join(', ')],
+        ['Lead creation date from / to', (dFrom || 'start') + ' / ' + (dTo || 'end')],
+        ['Basis', upd ? 'On Update' : 'On Create'],
+        ['Retail type', RT === 'dms' ? 'DMS only' : RT === 'co' ? 'Call Out (VOC) only' : 'DMS + Call Out (VOC)'],
+        ['Lead Type', setTxt(filters.leadTypes, 'All')], ['Source', setTxt(filters.sources, 'All')], ['Model', setTxt(filters.models, 'All')],
+        ['State', setTxt(filters.states, 'All')], ['City', setTxt(filters.cities, 'All')], ['Purchased Model (retails only)', setTxt(filters.purchasedModels, 'All')], [],
+        ['Pivot rows', rowDims.map(k => DIMS.find(d => d.key === k)?.label || k).join(' > ')], ['Pivot columns', colDims.map(k => DIMS.find(d => d.key === k)?.label || k).join(' > ')],
+        ['Pivot metrics', metricsSel.map(k => METRICS.find(x => x.key === k)?.label || k).join(', ')], ['Top N rows shown', topN > 0 ? topN : 'All'],
+        ...Object.keys(restr).map(d => ['Limited to shown ' + (DIMS.find(x => x.key === d)?.label || d), restr[d].size + ' value(s)']),
+        ...notes.map(n => ['Note', n]), [],
+        ['Leads', tL], ['Retail DMS', tD], ['Retail VOC (Call Out)', tC], ['Total Retail', tD + tC], ['L2R%', pct(tL, tD + tC)], [],
+        ['Sheets', 'Filters | Pivot | Summary | one By-sheet per pivot dimension | Lead detail | Retail detail'],
+        ['Note', 'Lead detail / Retail detail are aggregated rows (day x model x source x lead type x state x city with counts). The dashboard data holds no enquiry-level rows. The detail covers only the months present in the daily detail file (latest months); the Pivot sheet above follows the on-screen pivot and may include older months.']];
+      const summary = [['Metric', 'Value'], ['Leads', tL], ['Retail DMS', tD], ['Retail VOC (Call Out)', tC], ['Total Retail', tD + tC], ['L2R%', pct(tL, tD + tC)]];
+      const sheets = { 'Filters': fl, 'Pivot': pivotAoa, 'Summary': summary };
+      const byMap = { mdl: ['By Model', 'Model', acc.mdl, true], src: ['By Source', 'Source', acc.src, true], lt: ['By Lead Type', 'Lead Type', acc.lt, true],
+        st: ['By State', 'State', acc.st, true], city: ['By City', 'City', acc.city, true], pmd: ['By Purchased Model', 'Purchased Model', acc.pm, false] };
+      for (const dim of dimsInPivot) { const b = byMap[dim]; if (b) sheets[b[0]] = byDim(b[1], b[2], b[3]); }
+      sheets['Lead detail'] = leadRows; sheets['Retail detail'] = retRows;
+      exportXlsx(sheets, `TVS_Pivot_WithDetail_${Date.now()}`);
+    } finally { setExpBusy(false); }
   }
 
   const hasR2        = rowDims.length > 1;
@@ -6771,7 +6884,15 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
         ),
         tplActive && ce('button', { onClick: resetPivot, title: 'Clear the template: back to Model \u00D7 Month with no filters',
           style:{ ...selSt, fontWeight:600, whiteSpace:'nowrap', color:'#B01229', borderColor:'#B01229' } }, '\u21BA Reset pivot'),
-        !unsupported && !noData && !awaitingPipeline && ce(ExportBtn, { onClick: handleExport })
+        !unsupported && !noData && !awaitingPipeline && (role !== 'admin'
+          ? ce(ExportBtn, { onClick: () => handleExport(false) })
+          : ce('span', { style:{ position:'relative', display:'inline-block' } },
+              ce('button', { onClick: () => setExpMenu(v => !v), disabled: expBusy, title: 'Export to Excel',
+                style:{ padding:'4px 14px', fontSize:10, fontFamily:'inherit', fontWeight:700, border:'1px solid #93C5FD', borderRadius:20, background:'#fff', color:'#001F5B', cursor:'pointer', whiteSpace:'nowrap' } },
+                expBusy ? 'Preparing\u2026' : '\u2193 Export Excel \u25BE'),
+              expMenu && ce('div', { style:{ position:'absolute', right:0, top:'110%', zIndex:50, background:'#fff', border:'1px solid #CBD5E1', borderRadius:8, boxShadow:'0 6px 18px rgba(0,0,0,.15)', minWidth:260, padding:4 } },
+                ce('button', { onClick: () => { setExpMenu(false); handleExport(false); }, style:{ display:'block', width:'100%', textAlign:'left', padding:'8px 12px', fontSize:12, fontFamily:'inherit', background:'none', border:'none', cursor:'pointer' } }, 'Pivot only'),
+                ce('button', { onClick: () => { setExpMenu(false); handleExport(true); }, style:{ display:'block', width:'100%', textAlign:'left', padding:'8px 12px', fontSize:12, fontFamily:'inherit', background:'none', border:'none', cursor:'pointer' } }, 'Pivot + summary + lead-level detail (admin)'))))
       ),
     ),
 
