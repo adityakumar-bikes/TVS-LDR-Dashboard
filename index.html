@@ -6633,11 +6633,14 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
         else notes.push((DIMS.find(d => d.key === dim)?.label || dim) + ' values could not be matched to the detail data: not applied');
       }
       const dimsInPivot = [...new Set([...rowDims, ...colDims])];
-      const okL = (d, mi, si, lt, st, ci) =>
-        (!restr.lm || restr.lm.has(mlbl(d))) && (!restr.day || restr.day.has(dlbl(d))) && (!restr.mdl || restr.mdl.has(M0.mdl[mi])) &&
+      const okL = (d, mi, si, lt, st, ci, skipMdl) =>
+        (!restr.lm || restr.lm.has(mlbl(d))) && (!restr.day || restr.day.has(dlbl(d))) && (skipMdl || !restr.mdl || restr.mdl.has(M0.mdl[mi])) &&
         (!restr.src || restr.src.has(M0.src[si])) && (!restr.lt || restr.lt.has(M0.lt[lt])) && (!restr.st || restr.st.has(M0.st[st])) &&
         (!restr.city || restr.city.has(dx.cityName[ci]));
-      const okR = (k, mi, si, lt, st, ci, pm) => okL(k, mi, si, lt, st, ci) && (!restr.pmd || restr.pmd.has(M0.mdl[pm]));
+      // Purchased-model view: retails of models outside the Model filter are the pivot's "(Other enquired models)" row.
+      const othOn = !!(restr.mdl && restr.mdl.has('(Other enquired models)'));
+      const isOth = mi => othOn && !restr.mdl.has(M0.mdl[mi]) && !(filters.models && filters.models.has(M0.mdl[mi]));
+      const okR = (k, mi, si, lt, st, ci, pm) => (isOth(mi) ? okL(k, 0, si, lt, st, ci, true) : okL(k, mi, si, lt, st, ci)) && (!restr.pmd || restr.pmd.has(M0.mdl[pm]));
       const dayTxt = d => (d % 100 === 0 ? 'No day recorded' : (d % 100) + ' ' + MONTHS[Math.floor(d / 100) % 100 - 1] + ' ' + Math.floor(d / 10000));
       const pct = (l, rr) => (l > 0 ? +(rr / l * 100).toFixed(2) : '');
       const A = dx.L, B = dx.R, K = upd ? B.ud : B.cd, M = dx.maps, CN = dx.cityName;
@@ -6664,7 +6667,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
         const slot = B.rt[i] === 0 ? 1 : 2;
         retRows.push([dayTxt(B.cd[i]), dayTxt(B.ud[i]), M.mdl[B.mi[i]], M.src[B.si[i]], M.lt[B.lt[i]], M.st[B.st[i]], CN[B.ci[i]], M.mdl[B.pm[i]], slot === 1 ? 'DMS' : 'Call Out (VOC)', B.n[i]]);
         if (slot === 1) tD += B.n[i]; else tC += B.n[i];
-        bump(acc.mdl, M.mdl[B.mi[i]], slot, B.n[i]); bump(acc.src, M.src[B.si[i]], slot, B.n[i]); bump(acc.lt, M.lt[B.lt[i]], slot, B.n[i]);
+        bump(acc.mdl, isOth(B.mi[i]) ? '(Other enquired models)' : M.mdl[B.mi[i]], slot, B.n[i]); bump(acc.src, M.src[B.si[i]], slot, B.n[i]); bump(acc.lt, M.lt[B.lt[i]], slot, B.n[i]);
         bump(acc.st, M.st[B.st[i]], slot, B.n[i]); bump(acc.city, CN[B.ci[i]], slot, B.n[i]); bump(acc.pm, M.mdl[B.pm[i]], slot, B.n[i]);
       }
       const byDim = (title, m, withLeads) => {
