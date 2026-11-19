@@ -1,6 +1,6 @@
 {
   "retail_raw": {
-    "rows": 178587
+    "rows": 180901
   },
   "Jul'26-LeadMaster": {
     "rows": 190649,
@@ -11,8 +11,8 @@
     "filtered_rows": 157672
   },
   "CPS-Current": {
-    "rows": 119658,
-    "filtered_rows": 119658,
+    "rows": 125160,
+    "filtered_rows": 125160,
     "month": 2611
   },
   "CPS-T1-PreviousMonth": {
@@ -25,5 +25,5 @@
     "filtered_rows": 177077,
     "month": 2609
   },
-  "date": "2026-11-18"
+  "date": "2026-11-19"
 }
