@@ -1,6 +1,6 @@
 {
   "retail_raw": {
-    "rows": 184114
+    "rows": 185065
   },
   "Jul'26-LeadMaster": {
     "rows": 190649,
@@ -25,5 +25,5 @@
     "filtered_rows": 177077,
     "month": 2609
   },
-  "date": "2026-11-21"
+  "date": "2026-11-22"
 }
